@@ -1,0 +1,10 @@
+# Bundle patch for dsh-toolcall-text-guard.
+#
+# 只在层栈里插入本插件，不改动任何既有配置。
+- insert:
+    - id: toolcall-text-guard
+      name: dsh-toolcall-text-guard
+      config:
+        enabled: true
+        maxContinuations: 4
+        debug: true

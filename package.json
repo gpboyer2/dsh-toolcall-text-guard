@@ -1,0 +1,46 @@
+{
+  "name": "dsh-toolcall-text-guard",
+  "version": "0.1.0",
+  "description": "DeepSeek Harness plugin: re-opens a turn when the model silently stops mid-work (empty reply, leaked reasoning, half sentence, fragmentary tool-call text). Structural detection only, no judge model, no extra tokens.",
+  "license": "MIT",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gpboyer2/dsh-toolcall-text-guard.git"
+  },
+  "homepage": "https://github.com/gpboyer2/dsh-toolcall-text-guard#readme",
+  "bugs": {
+    "url": "https://github.com/gpboyer2/dsh-toolcall-text-guard/issues"
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "cordis",
+    "plugin",
+    "agent",
+    "tool-call",
+    "silent-stop",
+    "guard"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "files": [
+    "index.js",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ]
+}

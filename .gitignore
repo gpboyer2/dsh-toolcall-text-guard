@@ -1,0 +1,6 @@
+# 本机备份 / 运行产物：不进公开仓库
+*.bak*
+*.log
+node_modules/
+.DS_Store
+*.swp
