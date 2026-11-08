@@ -5,12 +5,12 @@
  * tool-call，DSH 的循环据此认为本轮说完了，直接收尾。用户侧看到的就是
  * 「干着干着突然不动了」。
  *
- * 真实会话里出现过的形态（判据是按日志一条条补出来的）：
+ * 常见的几类断法：
  *   A. 空回：text 为空、只有 reasoning，stopReason=stop（模型想完就停）；
  *   B. 残标签：text 就是一个残缺的工具标签，如 `<ask_user_question">`；
  *   C. 半句：text 停在一句话中间，以逗号/分号/破折号收尾；
  *   D. 思考泄漏：整段 `<analysis>…</analysis>` 复盘当正文吐出来，一个字
- *      结论都没有（见过 3 万字）；或者开头一个空 `<thinking> </thinking>`
+ *      结论都没有（可能长达数万字）；或者开头一个空 `<thinking> </thinking>`
  *      之后又开了一个思考块、却没闭合就停了。
  *   E. 调完工具一个字没说就收尾。
  *
@@ -195,7 +195,7 @@ export function decideRecovery(analysis, config = {}) {
 
   // B. 残标签：整段只有一个标签，或标签开头且很短。
   if (TAG_ONLY.test(text)) return { recover: true, why: 'tag-shape' }
-  if (JSON_CALL.test(text)) return { recover: true, why: 'json-tool-call' }
+  if (text.length <= cfg.fragmentMax && JSON_CALL.test(text)) return { recover: true, why: 'json-tool-call' }
   if (text.length <= cfg.fragmentMax && TAG_HEAD.test(text)) {
     return { recover: true, why: 'tag-head' }
   }
@@ -259,6 +259,8 @@ export function apply(ctx, config = {}) {
 
   const log = (msg) => ctx.logger?.info?.(`[${name}] ${msg}`)
   const warn = (msg) => ctx.logger?.warn?.(`[${name}] ${msg}`)
+  /** 所有落盘统一走这里：debug:false 时一行都不写（含 give-up / steer-failed）。 */
+  const writeLog = (line) => { if (cfg.debug) appendLog(cfg.logFile, line) }
 
   ctx.on('agent/turn-stopping', async ({ agent, turn }) => {
     const used = spent.get(turn) ?? 0
@@ -270,18 +272,16 @@ export function apply(ctx, config = {}) {
     const text = (analysis.lastText ?? '').trim()
 
     // 埋点：每判一次都落一行，事后能倒查「断在哪、是哪种形态、哪个模型」。
-    if (cfg.debug) {
-      appendLog(cfg.logFile, [
-        new Date().toISOString(),
-        `turn=${turn}`,
-        `step=${analysis.steps}`,
-        `why=${decision.why}`,
-        `recover=${decision.recover}`,
-        `model=${analysis.lastModel ?? '-'}`,
-        `used=${used}`,
-        `text=${JSON.stringify(text.slice(0, 80))}`,
-      ].join(' | '))
-    }
+    writeLog([
+      new Date().toISOString(),
+      `turn=${turn}`,
+      `step=${analysis.steps}`,
+      `why=${decision.why}`,
+      `recover=${decision.recover}`,
+      `model=${analysis.lastModel ?? '-'}`,
+      `used=${used}`,
+      `text=${JSON.stringify(text.slice(0, 80))}`,
+    ].join(' | '))
 
     // 上一次补救之后如果又是同样情形，说明模型不听，别再烧了
     if (probe.has(turn)) {
@@ -290,7 +290,7 @@ export function apply(ctx, config = {}) {
       if (decision.recover && events.length <= at) {
         spent.set(turn, cfg.maxContinuations)
         warn(`turn ${turn}: 上一次补救没有产生新内容，停止补救`)
-        appendLog(cfg.logFile, `${new Date().toISOString()} | turn=${turn} | give-up | 补救无新增内容`)
+        writeLog(`${new Date().toISOString()} | turn=${turn} | give-up | 补救无新增内容`)
         return
       }
     }
@@ -308,7 +308,7 @@ export function apply(ctx, config = {}) {
       log(`turn ${turn}: 命中 ${decision.why}，第 ${used + 1} 次补救`)
     } catch (error) {
       warn(`turn ${turn}: 补救失败 ${String(error)}`)
-      appendLog(cfg.logFile, `${new Date().toISOString()} | turn=${turn} | steer-failed | ${String(error)}`)
+      writeLog(`${new Date().toISOString()} | turn=${turn} | steer-failed | ${String(error)}`)
     }
   })
 

@@ -60,6 +60,10 @@ test('残标签 / JSON 调用残片', () => {
   assert.equal(why('<ask_user_question">'), 'tag-shape')
   assert.equal(why('{"tool_calls": [{"name": "bash"}]}'), 'json-tool-call')
   assert.equal(why('<bash>\nls -la'), 'tag-head')
+  // 长正文里只是提到这个字段名（比如模型在解释调用格式），不该被当成残片
+  const prose = '下面解释一下格式：' + '模型有时会写出 '.repeat(60)
+    + '{"tool_calls": [...]} 这样的结构，注意并不需要真的发起调用。'
+  assert.equal(why(prose), 'looks-complete')
 })
 
 test('半句截断', () => {

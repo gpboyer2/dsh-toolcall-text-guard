@@ -49,7 +49,13 @@ DSH 自带一个 `@deepseek-ai/dsh-text-toolcall-guard` 插件（社区的一些
 
 ## 识别哪些「断法」
 
-判定纯看结构，不调用裁判模型、不消耗额外 token。`why=` 的完整取值：
+判定纯看结构，不调用裁判模型、不消耗额外 token。
+
+**前置门槛**：这一轮此前至少发生过一次真实 `tool-call`。整轮都是一问一答、
+从来没调过工具的普通对话不会被介入（判为 `no-tool-anywhere`）——否则正常
+聊天也会被当成「断了」。
+
+`why=` 的完整取值：
 
 | `why` | 最后一步长什么样 | 是否补话 |
 | --- | --- | --- |
@@ -59,7 +65,7 @@ DSH 自带一个 `@deepseek-ai/dsh-text-toolcall-guard` 插件（社区的一些
 | `leak-no-body` | 思考/复盘标签闭合了，后面没正文 | 是 |
 | `leak-inner-unclosed` | 前面一个空标签闭合后，又开了个思考块却没关 | 是 |
 | `tag-shape` | 整段就一个残缺标签，如 `<ask_user_question">` | 是 |
-| `json-tool-call` | 混进正文的 `"tool_calls":` 残片 | 是 |
+| `json-tool-call` | 短文本里混进的 `"tool_calls":` 残片 | 是 |
 | `tag-head` | 标签开头且很短，像没写完的调用头 | 是 |
 | `half-sentence` | 停在逗号 / 分号 / 冒号 / 破折号上 | 是 |
 | `leak-has-body` | 标签闭合后**有**真正的正文 | 否（人家说完了） |
