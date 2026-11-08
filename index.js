@@ -94,6 +94,13 @@ const LEAK_CLOSE_ALL = /<\/(analysis|thinking|thought|reasoning|cot|summary|refl
 /** 单个开标签，用来发现「闭合之后又开了一个思考块」。 */
 const LEAK_OPEN_ONE = /<\s*(analysis|thinking|thought|reasoning|cot|summary|reflection|scratchpad)\b[^>]*>/i
 
+/**
+ * 整段只剩残缺的工具/XML 标签，没有半个字正文，如 `<parameter name="edit">`、
+ * `<function=foo>`、`</tool_call>`。思考标签闭合之后剩下的若是这种东西，
+ * 那是把工具调用写坏了，不是正文。
+ */
+const RESIDUAL_TAGS_ONLY = /^(?:\s*<\s*\/?\s*[A-Za-z_][\w:.-]*(?:\s*[^<>]*)?\s*>\s*)+$/
+
 /** 一句话没说完的收尾。 */
 const HALF_TAIL = /[，,；;：:、—]$/
 
@@ -188,6 +195,9 @@ export function decideRecovery(analysis, config = {}) {
       const closer = new RegExp(`</\\s*${opened[1]}\\s*>`, 'i')
       if (!closer.test(after)) return { recover: true, why: 'leak-inner-unclosed' }
     }
+    // 形如 `<thinking> </thinking>\n<parameter name="edit">`：闭合之后只剩一串残标签，
+    // 一个字正文都没有——那是工具调用写坏了，不是「说完了」。
+    if (RESIDUAL_TAGS_ONLY.test(rest)) return { recover: true, why: 'leak-residual-tag' }
     return { recover: false, why: 'leak-has-body' }
   }
 
@@ -195,6 +205,10 @@ export function decideRecovery(analysis, config = {}) {
 
   // B. 残标签：整段只有一个标签，或标签开头且很短。
   if (TAG_ONLY.test(text)) return { recover: true, why: 'tag-shape' }
+  // 整段就是一串带属性的残标签（`<parameter name="edit">`），没有正文。
+  if (text.length <= cfg.fragmentMax && RESIDUAL_TAGS_ONLY.test(text)) {
+    return { recover: true, why: 'tag-residual' }
+  }
   if (text.length <= cfg.fragmentMax && JSON_CALL.test(text)) return { recover: true, why: 'json-tool-call' }
   if (text.length <= cfg.fragmentMax && TAG_HEAD.test(text)) {
     return { recover: true, why: 'tag-head' }

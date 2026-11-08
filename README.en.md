@@ -89,9 +89,9 @@ Order of checks. First match wins:
 
 - Gates: `disabled` / `no-message` / `last-step-called-tool` / `no-tool-anywhere`
 - Empty reply: `reasoning-only`, `blank-after-tool`
-- Leaked reasoning: `leak-unclosed`, `leak-no-body`, `leak-inner-unclosed`, `leak-has-body`
+- Leaked reasoning: `leak-unclosed`, `leak-no-body`, `leak-inner-unclosed`, `leak-residual-tag`, `leak-has-body`
 - `text-too-long`, `maxChars` 8000
-- `tag-shape`, `json-tool-call`, `tag-head`, `half-sentence`
+- `tag-shape`, `tag-residual`, `json-tool-call`, `tag-head`, `half-sentence`
 - `looks-complete`
 
 `why` values:
@@ -99,9 +99,11 @@ Order of checks. First match wins:
 - `disabled`, `no-message`, `last-step-called-tool`, `no-tool-anywhere`: gate failed, no nudge.
 - `reasoning-only`, `blank-after-tool`: only reasoning, or nothing said after a tool result. Nudge.
 - `leak-unclosed`, `leak-no-body`, `leak-inner-unclosed`: thinking tag left open, closed with no body, or a second one left open. Nudge.
+- `leak-residual-tag`: only broken tags follow the closing tag, no prose at all. Nudge.
 - `leak-has-body`: a real answer follows the tag. No nudge.
 - `text-too-long`: body over `maxChars` 8000. No nudge. `leak-*` ignores this limit.
 - `tag-shape`: the whole message is one broken tag. Nudge.
+- `tag-residual`: the whole message is nothing but tags with attributes, no prose. Nudge.
 - `json-tool-call`, `tag-head`: a short JSON call fragment or a tag opening. Nudge. Both are capped by `fragmentMax` 400.
 - `half-sentence`: ends on a comma, semicolon, colon, or dash. Nudge. Capped by `halfSentenceMax` 200.
 - `looks-complete`: the answer reads as finished. No nudge.
