@@ -66,3 +66,34 @@ test('debug:true 时确实会落盘（对照，证明日志机制没被改坏）
   assert.equal(fs.existsSync(logFile), true)
   assert.match(fs.readFileSync(logFile, 'utf8'), /why=leak-no-body \| recover=true/)
 })
+
+test('两个会话的第一轮都叫 turn=1，计数不能互相串', async (t) => {
+  const logFile = tempLog(t)
+  const { handlers, ctx } = makeCtx()
+  apply(ctx, { debug: true, logFile, maxContinuations: 4 })
+
+  // 每个会话造一个「调过工具、最后一步只吐复盘壳」的回合，事件条数固定不变，
+  // 这样第二次进来必然命中 give-up，把计数一次性推到上限。
+  const mk = (id) => ({
+    session: { id, snapshotEvents: () => EVENTS },
+    steer() {},
+  })
+
+  const a = mk('session-aaa')
+  const b = mk('session-bbb')
+
+  // 会话 A 把本轮补救次数用光
+  await fire(handlers, a)
+  await fire(handlers, a)
+  await fire(handlers, a)
+  await fire(handlers, a)
+  await fire(handlers, a)
+
+  // 会话 B 的第一轮是新的一轮，必须还能补话，不能被 A 的次数挡住
+  await fire(handlers, b)
+
+  const log = fs.readFileSync(logFile, 'utf8').trim().split('\n')
+  const bLine = log[log.length - 1]
+  assert.match(bLine, /turn=1 \| step=\d+ \| why=leak-no-body \| recover=true \| .* \| used=0 \|/,
+    `会话 B 应从未用过的计数开始，实际记到：${bLine}`)
+})

@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { decideRecovery, steerFor, analyzeTurn, DEFAULTS, name } from '../index.js'
+import { decideRecovery, steerFor, analyzeTurn, apply, DEFAULTS, name } from '../index.js'
 
 /** 造一个「这一轮调过工具、但最后一步只吐文本」的分析结果。 */
 const a = (text, extra = {}) => ({

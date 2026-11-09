@@ -281,6 +281,12 @@ async function getCreateUserMessage() {
 
 export function apply(ctx, config = {}) {
   const cfg = { ...DEFAULTS, ...config }
+  /**
+   * 记数的键必须带上会话 id。回合号是按会话各数各的，几乎每个会话第一轮都叫
+   * turn=1；只按回合号记，A 会话用掉的次数会算到 B 会话头上，B 一进来就被判
+   * 「已经补过了」「上次补话没效果」而直接停手。
+   */
+  const turnKey = (agent, turn) => `${agent?.session?.id ?? '-'}#${turn}`
   /** 每轮已经补救了几次 */
   const spent = new Map()
   /** 每轮补救后的日志长度，用来判断上一次补救有没有生效 */
@@ -292,7 +298,8 @@ export function apply(ctx, config = {}) {
   const writeLog = (line) => { if (cfg.debug) appendLog(cfg.logFile, line) }
 
   ctx.on('agent/turn-stopping', async ({ agent, turn }) => {
-    const used = spent.get(turn) ?? 0
+    const key = turnKey(agent, turn)
+    const used = spent.get(key) ?? 0
     if (used >= cfg.maxContinuations) return
 
     const events = readEvents(agent?.session)
@@ -313,11 +320,11 @@ export function apply(ctx, config = {}) {
     ].join(' | '))
 
     // 上一次补救之后如果又是同样情形，说明模型不听，别再烧了
-    if (probe.has(turn)) {
-      const at = probe.get(turn)
-      probe.delete(turn)
+    if (probe.has(key)) {
+      const at = probe.get(key)
+      probe.delete(key)
       if (decision.recover && events.length <= at) {
-        spent.set(turn, cfg.maxContinuations)
+        spent.set(key, cfg.maxContinuations)
         warn(`turn ${turn}: 上一次补救没有产生新内容，停止补救`)
         writeLog(`${new Date().toISOString()} | turn=${turn} | give-up | 补救无新增内容`)
         return
@@ -332,8 +339,8 @@ export function apply(ctx, config = {}) {
         content: [{ type: 'text', text: steerFor(decision.why, cfg) }],
         source: PLUGIN_SOURCE,
       }))
-      spent.set(turn, used + 1)
-      probe.set(turn, events.length)
+      spent.set(key, used + 1)
+      probe.set(key, events.length)
       log(`turn ${turn}: 命中 ${decision.why}，第 ${used + 1} 次补救`)
     } catch (error) {
       warn(`turn ${turn}: 补救失败 ${String(error)}`)
@@ -342,10 +349,11 @@ export function apply(ctx, config = {}) {
   })
 
   /** 回合真正结束后清账，避免 Map 无限增长。 */
-  ctx.on('session/event', (_session, event) => {
+  ctx.on('session/event', (session, event) => {
     if (event?.type === 'turn/end') {
-      spent.delete(event.data?.turn)
-      probe.delete(event.data?.turn)
+      const key = `${session?.id ?? '-'}#${event.data?.turn}`
+      spent.delete(key)
+      probe.delete(key)
     }
   })
 

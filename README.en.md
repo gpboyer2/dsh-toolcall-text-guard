@@ -114,6 +114,8 @@ Order of checks. First match wins:
 
 Four nudges per turn at most. The plugin records the event count when it nudges. If the next judgment still wants a nudge and the count did not grow, it stops and writes a `give-up` line.
 
+Nudge counts and progress are keyed by session plus turn number. Every session numbers its own turns from 1, so without the session in the key, the nudges spent by session A would be charged to session B, and B would stop at once as "already nudged".
+
 Every judgment writes one line. Synthetic example, fields masked:
 
 ```text
