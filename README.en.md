@@ -4,13 +4,15 @@
 
 ## Is this for you?
 
-Install it when the session event stream ends with `turn/end completed`.
+Mid-conversation it just stops moving, and you run long jobs in DSH — the UI freezes while the work is still going.
 
-- You run long jobs in DSH. The UI stops mid-work. Send one more message and it picks up again. Install it.
-- `turn/end completed` at the end of the session event stream means the process is alive and the turn was closed. This plugin can fix that.
-- The session event stream just cuts off, with no `turn/end completed`. The process died. Nothing here can fix it. Skip it.
+- Send one more "continue" and it picks up again. Install it.
+- The work was not done, yet the turn was closed as "finished". The plugin catches it right as the turn is being closed. Recoverable.
+- The process dies outright and the event stream is cut in half. There is no moment to step in. Not recoverable. Skip it.
 - Plain Q&A turns that never called a tool. Skip it.
 - It does not clash with `@deepseek-ai/dsh-text-toolcall-guard`. That one covers one shape only: a `<tool_call>` tag at the start of a line.
+
+Whether the stream ends with `turn/end completed` only tells "the process is alive" apart from "the process died"; it is not a criterion. The turn writes `turn/end completed` as usual while the UI has already frozen — that is the most common way it breaks.
 
 ## Quick start
 
@@ -46,7 +48,7 @@ flowchart TD
         N7{"7 Retry and stall guard<br/>Fewer than 4 nudges this turn; did the last nudge produce new content"}
         N8["8 Nudge the same turn<br/>Use agent.steer to add one message, picked by the failure shape"]
     end
-    N9["9 Clean turn end<br/>Write turn/end completed and close the turn"]
+    N9["9 Turn closes<br/>Write turn/end completed; this only means the turn ran to its end, not that the work is done"]
 
     N1 -->|after you send it| N2
     N2 -->|turn starts| N3
@@ -72,11 +74,11 @@ By number:
 - 6 Judge the last step in order: A failure shape matched → 7. No match → leave the loop, go to 9.
 - 7 Retry and stall guard: Under 4 and still effective → 8. 4 used or no new content → leave the loop, go to 9.
 - 8 Nudge the same turn: Use `agent.steer` to add one message, picked by the failure shape. Back to 3.
-- 9 Clean turn end: Write `turn/end completed`. Done.
+- 9 Turn closes: write `turn/end completed`. That only means the turn ran to its end, not that the work is done.
 
 ## How it works
 
-The plugin hooks `agent/turn-stopping`, before `turn/end`. Judging is structural only.
+The plugin hooks `agent/turn-stopping`, before `turn/end` is written. It judges the event structure of the turn, not the closing status: the turn still writes `turn/end completed` while the UI has already frozen — exactly what this plugin is there to catch.
 
 Four prerequisites. All four must pass before judging:
 
@@ -150,7 +152,7 @@ node --test test/*.test.mjs
 
 Limits:
 
-- A dead process is out of scope. No `turn/end` in the event stream means no hook point.
+- A dead process is out of scope. The event stream is cut in half with no closing record, so there is no hook point.
 - Only shapes it knows are caught.
 - If the model keeps ignoring the nudge, the plugin stops. Four nudges at most, and it stops when no new content shows up.
 - Restart DSH for changes to take effect.
