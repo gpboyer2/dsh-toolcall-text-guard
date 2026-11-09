@@ -89,9 +89,9 @@ Order of checks. First match wins:
 
 - Gates: `disabled` / `no-message` / `last-step-called-tool` / `no-tool-anywhere`
 - Empty reply: `reasoning-only`, `blank-after-tool`
-- Leaked reasoning: `leak-unclosed`, `leak-no-body`, `leak-inner-unclosed`, `leak-residual-tag`, `leak-has-body`
+- Leaked reasoning: `leak-unclosed`, `leak-no-body`, `leak-inner-unclosed`, `leak-residual-tag`, `leak-call-head`, `leak-has-body`
 - `text-too-long`, `maxChars` 8000
-- `tag-shape`, `tag-residual`, `json-tool-call`, `tag-head`, `half-sentence`
+- `tag-shape`, `tag-residual`, `json-tool-call`, `call-head`, `tag-head`, `half-sentence`
 - `looks-complete`
 
 `why` values:
@@ -100,10 +100,12 @@ Order of checks. First match wins:
 - `reasoning-only`, `blank-after-tool`: only reasoning, or nothing said after a tool result. Nudge.
 - `leak-unclosed`, `leak-no-body`, `leak-inner-unclosed`: thinking tag left open, closed with no body, or a second one left open. Nudge.
 - `leak-residual-tag`: only broken tags follow the closing tag, no prose at all. Nudge.
+- `leak-call-head`: what follows the closing tag starts with a tool parameter tag and carries prose, e.g. `<parameter name="bash">` then a command that never finishes. Nudge.
 - `leak-has-body`: a real answer follows the tag. No nudge.
 - `text-too-long`: body over `maxChars` 8000. No nudge. `leak-*` ignores this limit.
 - `tag-shape`: the whole message is one broken tag. Nudge.
 - `tag-residual`: the whole message is nothing but tags with attributes, no prose. Nudge.
+- `call-head`: the message starts with a tool parameter tag and continues with prose, e.g. `<parameter name="description" string="true">Check backend`. No normal reply ever starts that way; it is a tool call written out as text. Nudge, not capped by `fragmentMax`.
 - `json-tool-call`, `tag-head`: a short JSON call fragment or a tag opening. Nudge. Both are capped by `fragmentMax` 400.
 - `half-sentence`: ends on a comma, semicolon, colon, or dash. Nudge. Capped by `halfSentenceMax` 200.
 - `looks-complete`: the answer reads as finished. No nudge.

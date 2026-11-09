@@ -89,9 +89,9 @@ flowchart TD
 
 - 门槛：`disabled` / `no-message` / `last-step-called-tool` / `no-tool-anywhere`
 - 空回：`reasoning-only`、`blank-after-tool`
-- 思考泄漏：`leak-unclosed`、`leak-no-body`、`leak-inner-unclosed`、`leak-residual-tag`、`leak-has-body`
+- 思考泄漏：`leak-unclosed`、`leak-no-body`、`leak-inner-unclosed`、`leak-residual-tag`、`leak-call-head`、`leak-has-body`
 - `text-too-long`，`maxChars` 8000
-- `tag-shape`、`tag-residual`、`json-tool-call`、`tag-head`、`half-sentence`
+- `tag-shape`、`tag-residual`、`json-tool-call`、`call-head`、`tag-head`、`half-sentence`
 - `looks-complete`
 
 `why` 取值：
@@ -100,10 +100,12 @@ flowchart TD
 - `reasoning-only`、`blank-after-tool`：只思考不落字、调完工具一个字没说。补话。
 - `leak-unclosed`、`leak-no-body`、`leak-inner-unclosed`：思考标签没闭合、闭合后没正文、又开一个没闭合。补话。
 - `leak-residual-tag`：标签闭合后只剩一串残标签，一个字正文都没有。补话。
+- `leak-call-head`：标签闭合后跟的是一个从工具参数标签起头、还带了正文的调用，如 `<parameter name="bash">` 后接命令却没收尾。补话。
 - `leak-has-body`：标签闭合后有正文。不补话。
 - `text-too-long`：正文超过 `maxChars` 8000。不补话。`leak-*` 不受这个上限约束。
 - `tag-shape`：整段就一个残缺标签。补话。
 - `tag-residual`：整段只有带属性的残标签，没有正文。补话。
+- `call-head`：整段从工具参数标签起头，标签后还带了正文，例如 `<parameter name="description" string="true">Check backend`。正常回复不会这样起头，这是把工具调用当正文写了。补话，不受 `fragmentMax` 约束。
 - `json-tool-call`、`tag-head`：短文本里的 JSON 调用残片、标签开头。补话。两个都受 `fragmentMax` 400 约束。
 - `half-sentence`：停在逗号、分号、冒号、破折号上。补话。受 `halfSentenceMax` 200 约束。
 - `looks-complete`：看着说完了。不补话。

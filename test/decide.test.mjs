@@ -49,10 +49,15 @@ test('思考泄漏：四种形态', () => {
     'leak-residual-tag',
   )
   assert.equal(why('<thinking> </thinking>\n</parameter>'), 'leak-residual-tag')
+  // 闭合后跟的是「从参数标签起头、带正文却没写完」的调用：真实断例，救
+  assert.equal(
+    why('<thinking> </thinking>\n<parameter name="bash">\ncd /Users/peng/Desktop/'),
+    'leak-call-head',
+  )
   // 闭合后有真正的正文：说完了，不打扰
   assert.equal(why('<thinking> </thinking>\n## 当前情况\n活干完了，测试全绿。'), 'leak-has-body')
-  // 残标签后面跟了正文，就不是残渣了，同样不打扰
-  assert.equal(why('<thinking> </thinking>\n<parameter name="edit">这是正文'), 'leak-has-body')
+  // 残标签后面跟的是正常正文（不是工具调用形态），不打扰
+  assert.equal(why('<thinking> </thinking>\n<parameter name="edit">这是正文'), 'leak-call-head')
   // 内层闭合且后面有正文：同样不打扰
   assert.equal(why('<thinking> </thinking>\n<thinking>想清楚了</thinking>\n结论如下。'), 'leak-has-body')
 })
@@ -70,8 +75,13 @@ test('残标签 / JSON 调用残片', () => {
   assert.equal(why('<parameter name="edit">'), 'tag-residual')
   assert.equal(why('<parameter name="edit">\n</parameter>'), 'tag-residual')
   assert.equal(why('<function=foo>'), 'tag-residual')
-  // 残标签后面跟了正文，就不是残渣
-  assert.equal(why('<parameter name="edit">这是正文'), 'looks-complete')
+  // 从参数标签起头、后面带正文：真实断例，正常回复不会这样起头
+  assert.equal(why('<parameter name="edit">这是正文'), 'call-head')
+  assert.equal(
+    why('<parameter name="description" string="true">Check backend process and health'),
+    'call-head',
+  )
+  assert.equal(why('<parameter name="bash">\ncd /Users/peng/Desktop/'), 'call-head')
   assert.equal(why('{"tool_calls": [{"name": "bash"}]}'), 'json-tool-call')
   assert.equal(why('<bash>\nls -la'), 'tag-head')
   // 长正文里只是提到这个字段名（比如模型在解释调用格式），不该被当成残片
@@ -92,7 +102,8 @@ test('正常说完', () => {
 test('recover 标志与 why 一致', () => {
   const recoverWhy = new Set([
     'blank-after-tool', 'reasoning-only', 'leak-unclosed', 'leak-no-body',
-    'leak-inner-unclosed', 'leak-residual-tag', 'tag-shape', 'tag-residual',
+    'leak-inner-unclosed', 'leak-residual-tag', 'leak-call-head',
+    'tag-shape', 'tag-residual', 'call-head',
     'json-tool-call', 'tag-head', 'half-sentence',
   ])
   const samples = [
@@ -117,6 +128,9 @@ test('四类思考泄漏共用同一句补话；残标签改用工具调用那�
   // 残标签是「工具调用写坏了」，用工具调用那句更对症
   assert.equal(steerFor('leak-residual-tag', DEFAULTS), DEFAULTS.steerText)
   assert.equal(steerFor('tag-residual', DEFAULTS), DEFAULTS.steerText)
+  // 带正文的残调用同理，也是「工具调用写坏了」
+  assert.equal(steerFor('leak-call-head', DEFAULTS), DEFAULTS.steerText)
+  assert.equal(steerFor('call-head', DEFAULTS), DEFAULTS.steerText)
   assert.equal(steerFor('half-sentence', DEFAULTS), DEFAULTS.steerTextHalf)
   assert.equal(steerFor('blank-after-tool', DEFAULTS), DEFAULTS.steerTextBlank)
   assert.equal(steerFor('reasoning-only', DEFAULTS), DEFAULTS.steerTextReasoning)

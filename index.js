@@ -101,6 +101,15 @@ const LEAK_OPEN_ONE = /<\s*(analysis|thinking|thought|reasoning|cot|summary|refl
  */
 const RESIDUAL_TAGS_ONLY = /^(?:\s*<\s*\/?\s*[A-Za-z_][\w:.-]*(?:\s*[^<>]*)?\s*>\s*)+$/
 
+/**
+ * 整段以工具调用的参数标签开头，如
+ * `<parameter name="description" string="true">Check backend process and health`。
+ * 正常回复绝不会从参数标签起头，一旦这样起头，就是把工具调用当正文写了；
+ * 不管标签后面跟没跟正文，只要整段没把调用写完整，就是「工具调用写坏了」。
+ * 注意：不能复用 RESIDUAL_TAGS_ONLY —— 那条要求整段只剩标签，标签后带正文就漏判。
+ */
+const TAG_CALL_HEAD = /^\s*<\/?\s*(?:parameter|function_calls?|invoke|antml:invoke|antml:parameter)\b/i
+
 /** 一句话没说完的收尾。 */
 const HALF_TAIL = /[，,；;：:、—]$/
 
@@ -198,6 +207,9 @@ export function decideRecovery(analysis, config = {}) {
     // 形如 `<thinking> </thinking>\n<parameter name="edit">`：闭合之后只剩一串残标签，
     // 一个字正文都没有——那是工具调用写坏了，不是「说完了」。
     if (RESIDUAL_TAGS_ONLY.test(rest)) return { recover: true, why: 'leak-residual-tag' }
+    // 形如 `<thinking> </thinking>\n<parameter name="bash">\ncd /Users/...`：标签后面
+    // 带正文，但整段是一个从参数标签起头的、没写完的调用。
+    if (TAG_CALL_HEAD.test(rest)) return { recover: true, why: 'leak-call-head' }
     return { recover: false, why: 'leak-has-body' }
   }
 
@@ -210,6 +222,9 @@ export function decideRecovery(analysis, config = {}) {
     return { recover: true, why: 'tag-residual' }
   }
   if (text.length <= cfg.fragmentMax && JSON_CALL.test(text)) return { recover: true, why: 'json-tool-call' }
+  // 整段从工具参数标签起头、后面带正文：`<parameter name="description" string="true">Check backend...`
+  // 正常回复不会这样起头，这是把工具调用当正文写了。
+  if (TAG_CALL_HEAD.test(text)) return { recover: true, why: 'call-head' }
   if (text.length <= cfg.fragmentMax && TAG_HEAD.test(text)) {
     return { recover: true, why: 'tag-head' }
   }
