@@ -1,7 +1,7 @@
 {
   "name": "dsh-toolcall-text-guard",
   "version": "0.1.0",
-  "description": "DeepSeek Harness plugin: re-opens a turn when the model silently stops mid-work (empty reply, leaked reasoning, half sentence, fragmentary tool-call text). Structural detection only, no judge model, no extra tokens.",
+  "description": "模型干到一半不吭声就收尾时，补一句话让它把活干完。",
   "license": "MIT",
   "meta": {
     "title": "静默收尾兜底",
@@ -10,7 +10,8 @@
   "type": "module",
   "main": "index.js",
   "exports": {
-    ".": "./index.js"
+    ".": "./index.js",
+    "./package.json": "./package.json"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs"
