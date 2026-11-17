@@ -71,6 +71,10 @@ export const DEFAULTS = {
   steerTextLeak:
     '你上一条回复停在思考过程中间就结束了，没有真正继续任务。'
     + '不要继续输出分析；直接发起下一步工具调用，或者用一两句话给出结论。',
+  /** 过渡句收尾（说了下一步、动作没发生）时的提示。 */
+  steerTextPlan:
+    '你上一条回复只交代了「接下来要做什么」，然后就结束了，那个动作并没有真的发生。'
+    + '现在直接去做：立刻发起相应的工具调用，不要再用文字描述下一步。',
   /** 判一次写一行日志，便于事后倒查。 */
   debug: true,
   logFile: DEFAULT_LOG,
@@ -113,6 +117,41 @@ const TAG_CALL_HEAD = /^\s*<\/?\s*(?:parameter|function_calls?|invoke|antml:invo
 /** 一句话没说完的收尾。 */
 const HALF_TAIL = /[，,；;：:、—]$/
 
+/**
+ * 过渡句收尾：模型说完「现在/接着/最后 + 要做的事」就停了，动作没发生。
+ * 这类文本本身通顺、以句号结尾，靠「残缺」判断抓不到，只能靠结构特征收窄：
+ * 极短、没有章节标题、不是在问用户、不是在等谁、没有交付物。
+ */
+const PLAN_TAIL_MAX = 300
+/** 必须有「什么时候 + 去干什么」的承诺句，光有动词不算。 */
+const PLAN_TAIL_ACT = /(现在|接下来|下一步|接着|然后|最后|继续)[^。；\n]{0,40}(跑|做|审|查|改|提交|推送|验证|复核|处理|执行|统一|修|补|加|写|确认|对账|验收)|先[^。；\n]{0,10}(跑|做|审|查|改|提交|推送|验证|复核|处理|执行|统一|修|补|加|写|确认|对账|验收)/
+/** 有章节标题 = 在汇报，不是在交代下一步。 */
+const PLAN_TAIL_HEADING = /^#{2,3}\s/m
+/** 结尾在问用户 = 该用户说话了。 */
+const PLAN_TAIL_ASK = /[？?]\s*$/
+/** 带链接 = 交了东西出来。 */
+const PLAN_TAIL_LINK = /\[[^\]]+\]\([^)]+\)/
+/** 说清已经做完 = 真收尾。 */
+const PLAN_TAIL_DONE = /交付完成|已交付|已推送|已提交|已合并|已修复/
+/** 在等子代理、等结果、等用户拍板 = 该结束。 */
+const PLAN_TAIL_WAIT = /等待|稍等|静待|你看|您看|你确认|你同意|你点头|可以我就|行我就|没问题我就|你定|你拍板|等(它|他|她|你|您|我|子代理|结果|消息|完成|回来|返回|结束|交付|汇报|回报|腾出)|请告诉我|你说一声|要不要|需要我|要改吗|你看一下|请确认/
+
+/**
+ * 是不是「说完下一步就停」的过渡句。
+ * 只认结构，不认语义：正常汇报有标题/链接/完成态，正常等待有等待词，正常提问有问号。
+ */
+export function isPlanTail(text) {
+  const t = String(text ?? '').trim()
+  if (t.length === 0 || t.length > PLAN_TAIL_MAX) return false
+  if (PLAN_TAIL_HEADING.test(t)) return false
+  if (PLAN_TAIL_ASK.test(t)) return false
+  if (PLAN_TAIL_LINK.test(t)) return false
+  if (PLAN_TAIL_DONE.test(t)) return false
+  if (PLAN_TAIL_WAIT.test(t)) return false
+  if (RESIDUAL_TAGS_ONLY.test(t) || TAG_CALL_HEAD.test(t)) return false
+  return PLAN_TAIL_ACT.test(t)
+}
+
 /** 从 session 上取事件数组，兼容不同内核版本。 */
 export function readEvents(session) {
   if (typeof session?.snapshotEvents === 'function') return session.snapshotEvents()
@@ -152,11 +191,14 @@ export function analyzeTurn(events, turn) {
   }
 
   const last = steps[steps.length - 1] ?? null
+  const prior = steps.slice(0, -1)
   return {
     turn,
     steps: steps.length,
     anyToolCall: steps.some((s) => s.hasToolCall),
     lastHasToolCall: last ? last.hasToolCall : false,
+    /** 此前调过工具的比例：接近 1 说明这一轮在连着干活，中途停下来多半是断的。 */
+    priorToolRatio: prior.length ? prior.filter((s) => s.hasToolCall).length / prior.length : 0,
     lastText: last ? last.text : '',
     lastReasoning: last ? last.reasoning : '',
     lastModel: last ? last.model : null,
@@ -210,6 +252,10 @@ export function decideRecovery(analysis, config = {}) {
     // 形如 `<thinking> </thinking>\n<parameter name="bash">\ncd /Users/...`：标签后面
     // 带正文，但整段是一个从参数标签起头的、没写完的调用。
     if (TAG_CALL_HEAD.test(rest)) return { recover: true, why: 'leak-call-head' }
+    // 思考块后面跟的是一句过渡语（「先推送这一笔」），不是结论：同样是说到一半就停。
+    if (analysis.steps >= 8 && (analysis.priorToolRatio ?? 0) >= 0.9 && isPlanTail(rest)) {
+      return { recover: true, why: 'leak-plan-tail' }
+    }
     return { recover: false, why: 'leak-has-body' }
   }
 
@@ -234,6 +280,12 @@ export function decideRecovery(analysis, config = {}) {
     return { recover: true, why: 'half-sentence' }
   }
 
+  // D. 过渡句收尾：整轮都在调工具，最后一步只留一句「现在/接着/最后 + 要做的事」，
+  //    说完就停，动作没发生。正常汇报有标题/链接/完成态，正常等待有等待词，都不算。
+  if (analysis.steps >= 8 && (analysis.priorToolRatio ?? 0) >= 0.9 && isPlanTail(text)) {
+    return { recover: true, why: 'plan-tail' }
+  }
+
   return { recover: false, why: 'looks-complete' }
 }
 
@@ -242,6 +294,7 @@ export function steerFor(why, cfg = DEFAULTS) {
   if (why === 'reasoning-only') return cfg.steerTextReasoning
   if (why === 'blank-after-tool') return cfg.steerTextBlank
   if (why === 'half-sentence') return cfg.steerTextHalf
+  if (why === 'plan-tail' || why === 'leak-plan-tail') return cfg.steerTextPlan
   if (why === 'leak-unclosed' || why === 'leak-no-body' || why === 'leak-inner-unclosed') return cfg.steerTextLeak
   return cfg.steerText
 }

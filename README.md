@@ -94,6 +94,7 @@ flowchart TD
 - 思考泄漏：`leak-unclosed`、`leak-no-body`、`leak-inner-unclosed`、`leak-residual-tag`、`leak-call-head`、`leak-has-body`
 - `text-too-long`，`maxChars` 8000
 - `tag-shape`、`tag-residual`、`json-tool-call`、`call-head`、`tag-head`、`half-sentence`
+- `plan-tail`、`leak-plan-tail`
 - `looks-complete`
 
 `why` 取值：
@@ -110,6 +111,8 @@ flowchart TD
 - `call-head`：整段从工具参数标签起头，标签后还带了正文，例如 `<parameter name="description" string="true">Check backend`。正常回复不会这样起头，这是把工具调用当正文写了。补话，不受 `fragmentMax` 约束。
 - `json-tool-call`、`tag-head`：短文本里的 JSON 调用残片、标签开头。补话。两个都受 `fragmentMax` 400 约束。
 - `half-sentence`：停在逗号、分号、冒号、破折号上。补话。受 `halfSentenceMax` 200 约束。
+- `plan-tail`：整轮都在调工具，最后一步只留一句「现在/接着/最后 + 要做的事」，说完就停，动作没发生，如「现在跑门禁并逐文件审 diff。」。判据只看结构：文本不超过 300 字、没有章节标题、不以问号收尾、不带链接、不说已完成、不含等待词。补话。
+- `leak-plan-tail`：思考块后面跟的也是这种过渡语（如 `<thought>…</thought>` 后只写「先推送这一笔。」）。补话。
 - `looks-complete`：看着说完了。不补话。
 
 每轮最多补 4 次。补话时记下当时的事件数。下一次还要补话、事件数却没涨，就停手，写一行 `give-up`。

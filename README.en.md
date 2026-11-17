@@ -94,6 +94,7 @@ Order of checks. First match wins:
 - Leaked reasoning: `leak-unclosed`, `leak-no-body`, `leak-inner-unclosed`, `leak-residual-tag`, `leak-call-head`, `leak-has-body`
 - `text-too-long`, `maxChars` 8000
 - `tag-shape`, `tag-residual`, `json-tool-call`, `call-head`, `tag-head`, `half-sentence`
+- `plan-tail`, `leak-plan-tail`
 - `looks-complete`
 
 `why` values:
@@ -110,6 +111,8 @@ Order of checks. First match wins:
 - `call-head`: the message starts with a tool parameter tag and continues with prose, e.g. `<parameter name="description" string="true">Check backend`. No normal reply ever starts that way; it is a tool call written out as text. Nudge, not capped by `fragmentMax`.
 - `json-tool-call`, `tag-head`: a short JSON call fragment or a tag opening. Nudge. Both are capped by `fragmentMax` 400.
 - `half-sentence`: ends on a comma, semicolon, colon, or dash. Nudge. Capped by `halfSentenceMax` 200.
+- `plan-tail`: every earlier step of the turn called a tool, and the last step only leaves a one-line hand-off such as "now I'll run the gates and review the diff". The action never happens. Judged on structure only: under 300 characters, no section headings, no trailing question mark, no links, no completion claim, no waiting words. Nudge.
+- `leak-plan-tail`: the same hand-off, but it follows a reasoning block (e.g. `<thought>...</thought>` then just "pushing this one now"). Nudge.
 - `looks-complete`: the answer reads as finished. No nudge.
 
 Four nudges per turn at most. The plugin records the event count when it nudges. If the next judgment still wants a nudge and the count did not grow, it stops and writes a `give-up` line.
