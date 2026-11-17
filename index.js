@@ -162,7 +162,7 @@ const PLAN_TAIL_LINK = /\[[^\]]+\]\([^)]+\)/
 /** 说清已经做完 = 真收尾。 */
 const PLAN_TAIL_DONE = /交付完成|已交付|已推送|已提交|已合并|已修复/
 /** 在等子代理、等结果、等用户拍板 = 该结束。 */
-const PLAN_TAIL_WAIT = /等待|稍等|静待|你看|您看|你确认|你同意|你点头|可以我就|行我就|没问题我就|你定|你拍板|等(它|他|她|你|您|我|子代理|结果|消息|完成|回来|返回|结束|交付|汇报|回报|腾出)|请告诉我|你说一声|要不要|需要我|要改吗|你看一下|请确认/
+const PLAN_TAIL_WAIT = /等待|稍等|静待|你看|您看|你确认|你同意|你点头|可以我就|行我就|没问题我就|你定|你拍板|等[^。；\n]{0,8}(它|他|她|你|您|我|子代理|任一|结果|消息|完成|回来|返回|结束|交付|汇报|回报|腾出|落地)|只等|请告诉我|你说一声|要不要|需要我|要改吗|你看一下|请确认/
 
 /**
  * 是不是「说完下一步就停」的过渡句。
@@ -354,7 +354,7 @@ export function decideRecovery(analysis, config = {}) {
     // 带正文，但整段是一个从参数标签起头的、没写完的调用。
     if (TAG_CALL_HEAD.test(rest)) return { recover: true, why: 'leak-call-head' }
     // 思考块后面跟的是一句过渡语（「先推送这一笔」），不是结论：同样是说到一半就停。
-    if (analysis.steps >= 8 && (analysis.priorToolRatio ?? 0) >= 0.9 && isPlanTail(rest)) {
+    if (analysis.steps >= 3 && (analysis.priorToolRatio ?? 0) >= 0.9 && isPlanTail(rest)) {
       return { recover: true, why: 'leak-plan-tail' }
     }
     // 闭合之后是一串反复改写的碎片（每行又挂着闭合标签），同上。
@@ -392,7 +392,7 @@ export function decideRecovery(analysis, config = {}) {
 
   // D. 过渡句收尾：整轮都在调工具，最后一步只留一句「现在/接着/最后 + 要做的事」，
   //    说完就停，动作没发生。正常汇报有标题/链接/完成态，正常等待有等待词，都不算。
-  if (analysis.steps >= 8 && (analysis.priorToolRatio ?? 0) >= 0.9 && isPlanTail(text)) {
+  if (analysis.steps >= 3 && (analysis.priorToolRatio ?? 0) >= 0.9 && isPlanTail(text)) {
     return { recover: true, why: 'plan-tail' }
   }
 

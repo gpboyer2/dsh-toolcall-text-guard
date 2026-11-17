@@ -123,7 +123,9 @@ test('过渡句收尾：说了下一步就停，动作没发生', () => {
   assert.equal(plan('这条改动很干净。'), 'looks-complete')
 
   // 结构条件不满足时不判：步数太少、此前不是全程调工具
-  assert.equal(why('现在跑门禁并逐文件审 diff。', { steps: 3, priorToolRatio: 1 }), 'looks-complete')
+  // 门槛是 3 步：短轮次同样会「说完下一步就停」（session-a2bf67e8 的 turn 3 只有 3 步），
+  // 但 1–2 步的极短轮多半是单发问答，仍不判。
+  assert.equal(why('现在跑门禁并逐文件审 diff。', { steps: 2, priorToolRatio: 1 }), 'looks-complete')
   assert.equal(why('现在跑门禁并逐文件审 diff。', { steps: 18, priorToolRatio: 0.5 }), 'looks-complete')
 })
 
