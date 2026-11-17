@@ -94,6 +94,7 @@ flowchart TD
 - 门槛：`disabled` / `no-message` / `last-step-called-tool` / `reasoning-echo` / `no-tool-anywhere`
 - 空回：`reasoning-only`、`blank-after-tool`
 - 思考泄漏：`leak-unclosed`、`leak-no-body`、`leak-inner-unclosed`、`leak-residual-tag`、`leak-call-head`、`leak-has-body`
+- 退化重复泄漏：`degenerate-leak`
 - `text-too-long`，`maxChars` 8000
 - `tag-shape`、`tag-residual`、`json-tool-call`、`call-head`、`tag-head`、`half-sentence`
 - `plan-tail`、`leak-plan-tail`、`reasoning-echo`
@@ -107,6 +108,7 @@ flowchart TD
 - `leak-residual-tag`：标签闭合后只剩一串残标签，一个字正文都没有。补话。
 - `leak-call-head`：标签闭合后跟的是一个从工具参数标签起头、还带了正文的调用，如 `<parameter name="bash">` 后接命令却没收尾。补话。
 - `leak-has-body`：标签闭合后有正文。不补话。
+- `degenerate-leak`：正文被同一句「接下来要做什么」反复改写、每行前面挂一个思考闭合标签（如会话 `324afd75` 第 2 轮第 38 步：748 字 / 18 行、17 个行首 `</thinking>`，越写越短，最后落到「先测。」就结束了）。这类重复会把长度撑过 `plan-tail` 的 300 字上限，让那条判据整段失效，所以单独兜住。判据只看结构：两行以上以闭合标签起头，且剥掉标签后仍有实际正文。以 `<analysis>` 等开标签起头的整段复盘不算，那种由 `leak-*` 按「闭合后有没有正文」处理。补话。
 - `text-too-long`：正文超过 `maxChars` 8000。不补话。`leak-*` 不受这个上限约束。
 - `tag-shape`：整段就一个残缺标签。补话。
 - `tag-residual`：整段只有带属性的残标签，没有正文。补话。

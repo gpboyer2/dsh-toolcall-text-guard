@@ -220,3 +220,47 @@ test('analyzeTurn 只统计本轮，并识别最后一步有没有工具调用',
   assert.equal(r.lastHasToolCall, false)
   assert.equal(r.lastText, '最后一步')
 })
+
+// 会话 324afd75（ppll-polymarket）第 2 轮第 38 步的真实断点：748 字 / 18 行，
+// 17 个行首 `</thinking>`，同一句「现在改 trader-picker.js」被反复改写、越写越短。
+// 这类重复把长度撑过 plan-tail 的 300 字上限，让那条判据整段失效——必须单独兜住。
+const DEGENERATE_TEXT = [
+  '现在改 trader-picker.js 的两个抓取函数：排行榜改为 cursor 翻页、拆开 v2 返回的外层结构；已结算持仓改用 `/v2/positions?status=CLOSED`。',
+  '</thinking>现在改 `trader-picker.js` 的两个抓取函数。先验证 v2 positions 的排序参数取值，避免猜。',
+  '</thinking>现在改 `trader-picker.js`。先验证 v2 positions 的排序参数取值，不要靠猜。',
+  '</thinking>现在改 `trader-picker.js`。先确认 v2 positions 的排序取值，别猜。',
+  '</thinking>先确认 v2 positions 的排序取值，再改 `trader-picker.js`。',
+  '</thinking>先确认 v2 positions 排序取值。',
+  '</thinking>先确认排序取值。',
+  '</thinking>先确认。',
+  '</thinking>先测 v2 positions 的排序参数取值。',
+  '</thinking>先测排序参数。',
+  '</thinking>先测排序。',
+  '</thinking>先测。',
+  '先测。',
+  '</thinking>',
+].join('\n')
+
+const withTool = (turn, text) => [
+  { type: 'assistant/message', data: { turn, message: { content: [{ type: 'tool-call' }] } } },
+  { type: 'assistant/message', data: { turn, message: { content: [{ type: 'text', text }] } } },
+]
+
+test('退化重复泄漏：同一句反复改写、行首挂闭合标签，判 degenerate-leak', () => {
+  const r = decideRecovery(analyzeTurn(withTool(2, DEGENERATE_TEXT), 2))
+  assert.equal(r.recover, true)
+  assert.equal(r.why, 'degenerate-leak')
+  assert.equal(steerFor('degenerate-leak', DEFAULTS), DEFAULTS.steerTextDegenerate)
+})
+
+test('退化重复泄漏：正常单次泄漏、正常汇报都不许误伤', () => {
+  // 单行闭合标签 + 完整正文：保持旧行为（放行），只有两行以上才判退化
+  const leakedOnce = '</thinking>\n现在改好了，测试全过。'
+  assert.equal(decideRecovery(analyzeTurn(withTool(1, leakedOnce), 1)).recover, false)
+  // 正常汇报：带标题、多点内容
+  const normal = '## 当前情况\n\n改完了。\n\n## 做了哪些\n\n- 把 v1 迁到 v2\n- 补了两个测试\n\n## 其他\n\n无。'
+  assert.equal(decideRecovery(analyzeTurn(withTool(1, normal), 1)).recover, false)
+  // 只有一行闭合标签，不足两行：不判
+  // 正文只剩一个孤立标签：仍由既有 tag-shape 兜住，不被新判据抢走
+  assert.equal(decideRecovery(analyzeTurn(withTool(1, '</thinking>\n'), 1)).why, 'tag-shape')
+})

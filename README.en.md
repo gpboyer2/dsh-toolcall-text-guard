@@ -92,6 +92,7 @@ Order of checks. First match wins:
 - Gates: `disabled` / `no-message` / `last-step-called-tool` / `reasoning-echo` / `no-tool-anywhere`
 - Empty reply: `reasoning-only`, `blank-after-tool`
 - Leaked reasoning: `leak-unclosed`, `leak-no-body`, `leak-inner-unclosed`, `leak-residual-tag`, `leak-call-head`, `leak-has-body`
+- Degenerate repetition leak: `degenerate-leak`
 - `text-too-long`, `maxChars` 8000
 - `tag-shape`, `tag-residual`, `json-tool-call`, `call-head`, `tag-head`, `half-sentence`
 - `plan-tail`, `leak-plan-tail`, `reasoning-echo`
@@ -105,6 +106,7 @@ Order of checks. First match wins:
 - `leak-residual-tag`: only broken tags follow the closing tag, no prose at all. Nudge.
 - `leak-call-head`: what follows the closing tag starts with a tool parameter tag and carries prose, e.g. `<parameter name="bash">` then a command that never finishes. Nudge.
 - `leak-has-body`: a real answer follows the tag. No nudge.
+- `degenerate-leak`: the body is one hand-off sentence rewritten over and over, each line prefixed with a reasoning close tag (e.g. session `324afd75` turn 2 step 38: 748 characters / 18 lines with 17 line-leading `</thinking>`, shrinking line by line until it ends on "先测。"). That repetition pushes the text past the 300-character cap of `plan-tail`, disabling that check entirely, so it is caught separately. Structure only: two or more lines starting with a close tag, with real prose left after stripping them. A whole recap that starts with an opening tag such as `<analysis>` is not this case; `leak-*` handles those by whether anything follows the close. Nudge.
 - `text-too-long`: body over `maxChars` 8000. No nudge. `leak-*` ignores this limit.
 - `tag-shape`: the whole message is one broken tag. Nudge.
 - `tag-residual`: the whole message is nothing but tags with attributes, no prose. Nudge.

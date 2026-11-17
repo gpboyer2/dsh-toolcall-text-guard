@@ -79,6 +79,10 @@ export const DEFAULTS = {
   steerTextPlan:
     '你上一条回复只交代了「接下来要做什么」，然后就结束了，那个动作并没有真的发生。'
     + '现在直接去做：立刻发起相应的工具调用，不要再用文字描述下一步。',
+  /** 退化重复泄漏（正文被同一句反复改写撑长、行首挂着思考闭合标签）时的提示。 */
+  steerTextDegenerate:
+    '你上一条回复把思考标签和同一句「接下来要做什么」反复重复了十几遍，正文已经碎成一片，'
+    + '那个动作一次都没有真的发生。现在直接发起工具调用把它做掉，不要再重复描述计划。',
   /** 判一次写一行日志，便于事后倒查。 */
   debug: true,
   logFile: DEFAULT_LOG,
@@ -94,13 +98,13 @@ const TAG_HEAD = /^\s*<\s*[A-Za-z_][\w-]*\s*["']?\s*>/
 const JSON_CALL = /"tool_calls"\s*:/
 
 /** 思考泄漏：正文以分析/复盘类标签开头，长度不限（可能是数万字的复盘）。 */
-const LEAK_HEAD = /^\s*<\s*(analysis|thinking|thought|reasoning|cot|summary|reflection|scratchpad)\b/i
+const LEAK_HEAD = /^\s*<\s*(analysis|thinking|thought|reasoning|cot|summary|reflection|scratchpad|分析|思考|摘要|复盘)(?=[\s>]|$)/i
 
 /** 所有闭合标签（全局），取最后一个，看它后面还剩什么。 */
-const LEAK_CLOSE_ALL = /<\/(analysis|thinking|thought|reasoning|cot|summary|reflection|scratchpad)\s*>/gi
+const LEAK_CLOSE_ALL = /<\/(analysis|thinking|thought|reasoning|cot|summary|reflection|scratchpad|分析|思考|摘要|复盘)\s*>/gi
 
 /** 单个开标签，用来发现「闭合之后又开了一个思考块」。 */
-const LEAK_OPEN_ONE = /<\s*(analysis|thinking|thought|reasoning|cot|summary|reflection|scratchpad)\b[^>]*>/i
+const LEAK_OPEN_ONE = /<\s*(analysis|thinking|thought|reasoning|cot|summary|reflection|scratchpad|分析|思考|摘要|复盘)(?=[\s>]|$)[^>]*>/i
 
 /**
  * 整段只剩残缺的工具/XML 标签，没有半个字正文，如 `<parameter name="edit">`、
@@ -120,6 +124,13 @@ const TAG_CALL_HEAD = /^\s*<\/?\s*(?:parameter|function_calls?|invoke|antml:invo
 
 /** 一句话没说完的收尾。 */
 const HALF_TAIL = /[，,；;：:、—]$/
+
+/**
+ * 行首就是思考闭合标签。正文里本不该出现这种东西：正常输出最多在开头带一个
+ * `<thinking> </thinking>` 壳（那种由 leak-* 系列按「闭合之后有没有正文」处理）。
+ * 一旦整段被切成多行、其中两行以上以闭合标签起头，就是思考块反复泄漏进正文了。
+ */
+const LEAK_CLOSE_LINE_HEAD = /^\s*<\s*\/\s*(analysis|thinking|thought|reasoning|cot|summary|reflection|scratchpad|分析|思考|摘要|复盘)\s*>/i
 
 /**
  * 过渡句收尾：模型说完「现在/接着/最后 + 要做的事」就停了，动作没发生。
@@ -154,6 +165,28 @@ export function isPlanTail(text) {
   if (PLAN_TAIL_WAIT.test(t)) return false
   if (RESIDUAL_TAGS_ONLY.test(t) || TAG_CALL_HEAD.test(t)) return false
   return PLAN_TAIL_ACT.test(t)
+}
+
+/**
+ * 退化重复泄漏：整段被切成多行，其中两行以上以思考闭合标签起头。
+ *
+ * 典型形态（会话 324afd75 第 2 轮第 38 步，748 字 / 18 行、17 个行首 `</thinking>`）：
+ * 模型把「现在要去做 X」这句话反复改写，每行前面挂一个闭合标签，越写越短，
+ * 最后落到「先测。」这类碎片上就结束了——动作一次都没发生。
+ * 这类重复把长度撑过 plan-tail 的 300 字上限，让那条判据整段失效，必须单独兜住。
+ * 判据只看结构：正常回复不会在正文里塞两个以上的行首闭合标签。
+ */
+export function isDegenerateLeak(text) {
+  // 以思考开标签起头的整段（含十几份压缩摘要）由 leak-* 系列按「闭合后有没有正文」处理，
+  // 这里只看「没有开标签、却反复出现行首闭合标签」那种碎片。
+  if (LEAK_HEAD.test(String(text ?? ''))) return false
+  const lines = String(text ?? '').split('\n').map((s) => s.trim()).filter(Boolean)
+  if (lines.length < 2) return false
+  const heads = lines.filter((s) => LEAK_CLOSE_LINE_HEAD.test(s)).length
+  if (heads < 2) return false
+  // 剥掉标签后还要剩实际正文；只剩一串残标签的走 tag-* 那几条。
+  const bare = lines.map((s) => s.replace(LEAK_CLOSE_LINE_HEAD, '').trim()).filter(Boolean)
+  return bare.length >= 2 && bare.some((s) => s.length >= 8)
 }
 
 /**
@@ -283,8 +316,16 @@ export function decideRecovery(analysis, config = {}) {
     if (analysis.steps >= 8 && (analysis.priorToolRatio ?? 0) >= 0.9 && isPlanTail(rest)) {
       return { recover: true, why: 'leak-plan-tail' }
     }
+    // 闭合之后是一串反复改写的碎片（每行又挂着闭合标签），同上。
+    if (isDegenerateLeak(rest)) return { recover: true, why: 'degenerate-leak' }
     return { recover: false, why: 'leak-has-body' }
   }
+
+  // 退化重复泄漏：同一句被反复改写、每行挂着思考闭合标签（见 isDegenerateLeak）。
+  // 这类文本靠重复把长度撑到远超 plan-tail 的 300 字上限，让那条判据整段失效。
+  // 必须排在 LEAK_HEAD 之后：以 <analysis> 等开标签起头的完整复盘由上面的 leak-* 处理，
+  // 不能被这条抢走（否则十几份压缩摘要会被误判成断点）。
+  if (isDegenerateLeak(text)) return { recover: true, why: 'degenerate-leak' }
 
   if (text.length > cfg.maxChars) return { recover: false, why: 'text-too-long' }
 
@@ -322,6 +363,7 @@ export function steerFor(why, cfg = DEFAULTS) {
   if (why === 'blank-after-tool') return cfg.steerTextBlank
   if (why === 'half-sentence') return cfg.steerTextHalf
   if (why === 'plan-tail' || why === 'leak-plan-tail') return cfg.steerTextPlan
+  if (why === 'degenerate-leak') return cfg.steerTextDegenerate
   if (why === 'reasoning-echo') return cfg.steerTextEcho
   if (why === 'leak-unclosed' || why === 'leak-no-body' || why === 'leak-inner-unclosed') return cfg.steerTextLeak
   return cfg.steerText
