@@ -93,6 +93,7 @@ Order of checks. First match wins:
 - Empty reply: `reasoning-only`, `blank-after-tool`
 - Leaked reasoning: `leak-unclosed`, `leak-no-body`, `leak-inner-unclosed`, `leak-residual-tag`, `leak-call-head`, `leak-has-body`
 - Degenerate repetition leak: `degenerate-leak`
+- Close-tag tail stub: `leak-tail-stub`
 - `text-too-long`, `maxChars` 8000
 - `tag-shape`, `tag-residual`, `json-tool-call`, `call-head`, `tag-head`, `half-sentence`
 - `plan-tail`, `leak-plan-tail`, `reasoning-echo`
@@ -107,6 +108,7 @@ Order of checks. First match wins:
 - `leak-call-head`: what follows the closing tag starts with a tool parameter tag and carries prose, e.g. `<parameter name="bash">` then a command that never finishes. Nudge.
 - `leak-has-body`: a real answer follows the tag. No nudge.
 - `degenerate-leak`: the body is one hand-off sentence rewritten over and over, each line prefixed with a reasoning close tag (e.g. session `324afd75` turn 2 step 38: 748 characters / 18 lines with 17 line-leading `</thinking>`, shrinking line by line until it ends on "先测。"). That repetition pushes the text past the 300-character cap of `plan-tail`, disabling that check entirely, so it is caught separately. Structure only: two or more lines starting with a close tag, with real prose left after stripping them. A whole recap that starts with an opening tag such as `<analysis>` is not this case; `leak-*` handles those by whether anything follows the close. Nudge.
+- `leak-tail-stub`: the last sentence drags a reasoning close tag, and stripping the tags leaves only a very short line (80 characters or fewer), e.g. session `72688503` turn 1 step 20: "查一下依赖装在哪。</thinking></thinking>" (9 characters left after stripping). All 20 steps of the turn called tools, but this step called nothing and concluded nothing, and `plan-tail` misses it because the line has no "now / first" prefix. Structure only: the tag lands at the end, nothing substantial remains, and there is no heading, link, completion claim, or waiting word. Nudge.
 - `text-too-long`: body over `maxChars` 8000. No nudge. `leak-*` ignores this limit.
 - `tag-shape`: the whole message is one broken tag. Nudge.
 - `tag-residual`: the whole message is nothing but tags with attributes, no prose. Nudge.

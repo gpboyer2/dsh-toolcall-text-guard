@@ -83,6 +83,10 @@ export const DEFAULTS = {
   steerTextDegenerate:
     '你上一条回复把思考标签和同一句「接下来要做什么」反复重复了十几遍，正文已经碎成一片，'
     + '那个动作一次都没有真的发生。现在直接发起工具调用把它做掉，不要再重复描述计划。',
+  /** 正文末尾拖着思考闭合标签、只剩一句短话时的提示。 */
+  steerTextLeakTail:
+    '你上一条回复在一句很短的话后面直接挂了思考闭合标签，那多半是思考写到一半漏进了正文，'
+    + '动作还没发生。现在直接发起工具调用接着做；如果你本来要给结论，就把话说完整。',
   /** 判一次写一行日志，便于事后倒查。 */
   debug: true,
   logFile: DEFAULT_LOG,
@@ -131,6 +135,15 @@ const HALF_TAIL = /[，,；;：:、—]$/
  * 一旦整段被切成多行、其中两行以上以闭合标签起头，就是思考块反复泄漏进正文了。
  */
 const LEAK_CLOSE_LINE_HEAD = /^\s*<\s*\/\s*(analysis|thinking|thought|reasoning|cot|summary|reflection|scratchpad|分析|思考|摘要|复盘)\s*>/i
+
+/**
+ * 正文末尾挂着思考闭合标签。正常回复不会以 `</thinking>` 收尾：要么根本没有标签，
+ * 要么开头带一个空壳。落在句尾，说明思考块漏出来、并且话没说完。
+ */
+const LEAK_CLOSE_TAIL = /<\/(analysis|thinking|thought|reasoning|cot|summary|reflection|scratchpad|分析|思考|摘要|复盘)\s*>\s*$/i
+
+/** 所有思考标签（开或闭、全局），用来把一段话剥干净再量长度。 */
+const LEAK_TAGS_ALL = /<\/?\s*(analysis|thinking|thought|reasoning|cot|summary|reflection|scratchpad|分析|思考|摘要|复盘)\s*>/gi
 
 /**
  * 过渡句收尾：模型说完「现在/接着/最后 + 要做的事」就停了，动作没发生。
@@ -187,6 +200,34 @@ export function isDegenerateLeak(text) {
   // 剥掉标签后还要剩实际正文；只剩一串残标签的走 tag-* 那几条。
   const bare = lines.map((s) => s.replace(LEAK_CLOSE_LINE_HEAD, '').trim()).filter(Boolean)
   return bare.length >= 2 && bare.some((s) => s.length >= 8)
+}
+
+/**
+ * 收尾挂标签：末句后面拖着思考闭合标签，剥掉标签后只剩一句很短的话。
+ *
+ * 典型形态（会话 72688503 第 1 轮第 20 步）：正文是「查一下依赖装在哪。</thinking></thinking>」，
+ * 32 个字符、剥完只剩 9 个字；整轮 20 步都在调工具，这一步既没发起调用也没给结论，
+ * 于是轮次被判成完成。plan-tail 认不出它——那句里没有「现在/先」这类前缀词。
+ * 判据只看结构：标签落在结尾 + 剥掉后没有实质内容。
+ */
+export function isLeakTailStub(text) {
+  const t = String(text ?? '').trim()
+  if (!t) return false
+  // 以开标签起头的整段（含长复盘）由 leak-* 按「闭合后有没有正文」处理，这里不抢。
+  if (LEAK_HEAD.test(t)) return false
+  if (!LEAK_CLOSE_TAIL.test(t)) return false
+  const bare = t.replace(LEAK_TAGS_ALL, ' ').replace(/\s+/g, ' ').trim()
+  // 剥完一个字都不剩：那是纯标签，走 tag-shape / tag-residual。
+  if (bare.length === 0) return false
+  // 剥完还有成段正文：标签只是尾巴，话本身说完了，放行。
+  // 80 字是量出来的：全机 996 个会话 / 2392 个回合里，符合「标签落在结尾」的只有 1 条
+  // 落在 80 字以内（真断点，剥完 9 字），其余都远超这个长度。
+  if (bare.length > 80) return false
+  if (PLAN_TAIL_HEADING.test(bare)) return false
+  if (PLAN_TAIL_LINK.test(bare)) return false
+  if (PLAN_TAIL_DONE.test(bare)) return false
+  if (PLAN_TAIL_WAIT.test(bare)) return false
+  return true
 }
 
 /**
@@ -326,6 +367,7 @@ export function decideRecovery(analysis, config = {}) {
   // 必须排在 LEAK_HEAD 之后：以 <analysis> 等开标签起头的完整复盘由上面的 leak-* 处理，
   // 不能被这条抢走（否则十几份压缩摘要会被误判成断点）。
   if (isDegenerateLeak(text)) return { recover: true, why: 'degenerate-leak' }
+  if (isLeakTailStub(text)) return { recover: true, why: 'leak-tail-stub' }
 
   if (text.length > cfg.maxChars) return { recover: false, why: 'text-too-long' }
 
@@ -364,6 +406,7 @@ export function steerFor(why, cfg = DEFAULTS) {
   if (why === 'half-sentence') return cfg.steerTextHalf
   if (why === 'plan-tail' || why === 'leak-plan-tail') return cfg.steerTextPlan
   if (why === 'degenerate-leak') return cfg.steerTextDegenerate
+  if (why === 'leak-tail-stub') return cfg.steerTextLeakTail
   if (why === 'reasoning-echo') return cfg.steerTextEcho
   if (why === 'leak-unclosed' || why === 'leak-no-body' || why === 'leak-inner-unclosed') return cfg.steerTextLeak
   return cfg.steerText

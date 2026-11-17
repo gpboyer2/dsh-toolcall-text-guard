@@ -264,3 +264,31 @@ test('退化重复泄漏：正常单次泄漏、正常汇报都不许误伤', ()
   // 正文只剩一个孤立标签：仍由既有 tag-shape 兜住，不被新判据抢走
   assert.equal(decideRecovery(analyzeTurn(withTool(1, '</thinking>\n'), 1)).why, 'tag-shape')
 })
+
+// 会话 72688503（ppll-polymarket）第 1 轮第 20 步的真实断点：
+// 正文只有「查一下依赖装在哪。」后面拖着两个 </thinking>，剥掉标签只剩 9 个字，
+// 整轮 20 步都在调工具，这一步既没发起调用也没给结论，plan-tail 却认不出
+// （那句里没有「现在/先」这类前缀词）。
+test('收尾挂标签：短句后面拖闭合标签，判 leak-tail-stub', () => {
+  const text = '查一下依赖装在哪。</thinking></thinking>\n\n'
+  const r = decideRecovery(analyzeTurn(withTool(1, text), 1))
+  assert.equal(r.recover, true)
+  assert.equal(r.why, 'leak-tail-stub')
+  assert.equal(steerFor('leak-tail-stub', DEFAULTS), DEFAULTS.steerTextLeakTail)
+})
+
+test('收尾挂标签：有实质正文、纯标签、开标签起头都不许误伤', () => {
+  // 标签只是尾巴，话本身说完了（剥完远超 140 字）
+  const longBody = '已经把 v1 全部迁到 v2：余额、赎回、对账、跟单信号源、钱包筛选、回测脚本共 11 处调用点都改完并逐个实测，'
+    + '响应结构、分页方式、字段名三处差异都按官方 openapi 对齐，回归全绿。</thinking>'
+  assert.equal(decideRecovery(analyzeTurn(withTool(1, longBody), 1)).why, 'looks-complete')
+  // 剥完一个字不剩：交给 tag-shape / tag-residual
+  assert.equal(decideRecovery(analyzeTurn(withTool(1, '</thinking></thinking>'), 1)).why, 'tag-residual')
+  // 以开标签起头的整段复盘：交给 leak-* 按「闭合后有没有正文」处理
+  // 闭合后没有正文：仍由既有 leak-no-body 兜住，不被新判据抢走
+  const opened = '<analysis>查完了。</analysis>'
+  assert.equal(decideRecovery(analyzeTurn(withTool(1, opened), 1)).why, 'leak-no-body')
+  // 标签在句中、后面还有正文：不是收尾挂标签
+  const midTag = '查一下依赖装在哪。</thinking>现在去查。'
+  assert.equal(decideRecovery(analyzeTurn(withTool(1, midTag), 1)).recover, false)
+})
