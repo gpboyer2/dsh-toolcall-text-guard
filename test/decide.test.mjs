@@ -138,6 +138,27 @@ test('思考块后面跟过渡语，同样算说到一半', () => {
   assert.equal(plan('<thinking>   </thinking>\n## 当前情况\n重画完成，验收通过。'), 'leak-has-body')
 })
 
+test('思考回声：正文被整段写成思考', () => {
+  const long = '用户恼了，他要的是一套能照着做的完整方案，不是再拆机制。' + '前面几轮一直在拆机制、给对比表。'.repeat(12)
+  const echo = (t, r) => why(t, { steps: 1, anyToolCall: false, lastText: t, lastReasoning: r })
+
+  // 真实断例：正文与思考完全相同，且这一轮没调过工具
+  assert.equal(echo(long, long), 'reasoning-echo')
+  // 正文是思考的前缀（少个尾巴）
+  assert.equal(echo(long, long + '补一句结束语。'), 'reasoning-echo')
+
+  // 正常回复：正文和思考内容不同（没触发回声，仍走原来的门槛）
+  assert.equal(echo('## 常小娥怎么玩\n第 1 回合就按技能，场上只留一个人。', long), 'no-tool-anywhere')
+  // 太短的不比（避免把一句「好的」误判）
+  assert.equal(echo('好的，我明白了。', '好的，我明白了。'), 'no-tool-anywhere')
+  // 长度差太多：正文只是思考的一小段
+  assert.equal(echo(long.slice(0, 60), long), 'no-tool-anywhere')
+})
+
+test('思考回声用「别复述分析过程」那句补话', () => {
+  assert.equal(steerFor('reasoning-echo', DEFAULTS), DEFAULTS.steerTextEcho)
+})
+
 test('过渡句收尾用「动作没发生」那句补话', () => {
   assert.equal(steerFor('plan-tail', DEFAULTS), DEFAULTS.steerTextPlan)
   assert.equal(steerFor('leak-plan-tail', DEFAULTS), DEFAULTS.steerTextPlan)
@@ -148,7 +169,7 @@ test('recover 标志与 why 一致', () => {
     'blank-after-tool', 'reasoning-only', 'leak-unclosed', 'leak-no-body',
     'leak-inner-unclosed', 'leak-residual-tag', 'leak-call-head',
     'tag-shape', 'tag-residual', 'call-head',
-    'json-tool-call', 'tag-head', 'half-sentence', 'plan-tail', 'leak-plan-tail',
+    'json-tool-call', 'tag-head', 'half-sentence', 'plan-tail', 'leak-plan-tail', 'reasoning-echo',
   ])
   const samples = [
     '', '<analysis>x', '<analysis>x</analysis>',

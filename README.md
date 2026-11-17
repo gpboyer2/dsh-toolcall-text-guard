@@ -87,14 +87,16 @@ flowchart TD
 - 本回合至少发生过一次真实 `tool-call`。
 - 最后一步没有 `tool-call`。
 
+例外：`reasoning-echo` 不受第二条约束——纯问答轮（整轮没调过工具）同样会把思考写成正文，那种坏输出也得救。
+
 判定按顺序走，命中就停：
 
-- 门槛：`disabled` / `no-message` / `last-step-called-tool` / `no-tool-anywhere`
+- 门槛：`disabled` / `no-message` / `last-step-called-tool` / `reasoning-echo` / `no-tool-anywhere`
 - 空回：`reasoning-only`、`blank-after-tool`
 - 思考泄漏：`leak-unclosed`、`leak-no-body`、`leak-inner-unclosed`、`leak-residual-tag`、`leak-call-head`、`leak-has-body`
 - `text-too-long`，`maxChars` 8000
 - `tag-shape`、`tag-residual`、`json-tool-call`、`call-head`、`tag-head`、`half-sentence`
-- `plan-tail`、`leak-plan-tail`
+- `plan-tail`、`leak-plan-tail`、`reasoning-echo`
 - `looks-complete`
 
 `why` 取值：
@@ -113,6 +115,7 @@ flowchart TD
 - `half-sentence`：停在逗号、分号、冒号、破折号上。补话。受 `halfSentenceMax` 200 约束。
 - `plan-tail`：整轮都在调工具，最后一步只留一句「现在/接着/最后 + 要做的事」，说完就停，动作没发生，如「现在跑门禁并逐文件审 diff。」。判据只看结构：文本不超过 300 字、没有章节标题、不以问号收尾、不带链接、不说已完成、不含等待词。补话。
 - `leak-plan-tail`：思考块后面跟的也是这种过渡语（如 `<thought>…</thought>` 后只写「先推送这一笔。」）。补话。
+- `reasoning-echo`：正文和思考几乎是同一段话（去掉空白后，短的那段不低于长的那段的 85%，且都不少于 200 字）。正常回复里思考是独白、正文是给用户的话，两者不该一样；一样就说明模型把内部独白当成回答吐出来了。补话，且不受「本回合调过工具」这条门槛限制。
 - `looks-complete`：看着说完了。不补话。
 
 每轮最多补 4 次。补话时记下当时的事件数。下一次还要补话、事件数却没涨，就停手，写一行 `give-up`。

@@ -71,6 +71,10 @@ export const DEFAULTS = {
   steerTextLeak:
     '你上一条回复停在思考过程中间就结束了，没有真正继续任务。'
     + '不要继续输出分析；直接发起下一步工具调用，或者用一两句话给出结论。',
+  /** 思考回声（把独白当正文吐出来）时的提示。 */
+  steerTextEcho:
+    '你上一条回复把内部思考原样当成正文输出了一遍，用户看到的是一段独白，不是答案。'
+    + '现在重新回答：直接给结论和能照着做的做法，不要复述你的分析过程。',
   /** 过渡句收尾（说了下一步、动作没发生）时的提示。 */
   steerTextPlan:
     '你上一条回复只交代了「接下来要做什么」，然后就结束了，那个动作并没有真的发生。'
@@ -152,6 +156,24 @@ export function isPlanTail(text) {
   return PLAN_TAIL_ACT.test(t)
 }
 
+/**
+ * 思考回声：正文和思考几乎是同一段话。
+ * 正常回复里，思考是独白、正文是给用户的话，两者内容不同；
+ * 一旦正文整段等于（或几乎等于）思考，说明模型把内部独白当成回答了。
+ */
+const ECHO_MIN_CHARS = 200
+const ECHO_MIN_RATIO = 0.85
+
+export function isReasoningEcho(text, reasoning) {
+  const t = String(text ?? '').replace(/\s+/g, '')
+  const r = String(reasoning ?? '').replace(/\s+/g, '')
+  if (t.length < ECHO_MIN_CHARS || r.length < ECHO_MIN_CHARS) return false
+  const min = Math.min(t.length, r.length)
+  const max = Math.max(t.length, r.length)
+  if (min / max < ECHO_MIN_RATIO) return false
+  return t === r || r.startsWith(t) || t.startsWith(r)
+}
+
 /** 从 session 上取事件数组，兼容不同内核版本。 */
 export function readEvents(session) {
   if (typeof session?.snapshotEvents === 'function') return session.snapshotEvents()
@@ -215,6 +237,11 @@ export function decideRecovery(analysis, config = {}) {
   if (!cfg.enabled) return { recover: false, why: 'disabled' }
   if (analysis.steps === 0) return { recover: false, why: 'no-message' }
   if (analysis.lastHasToolCall) return { recover: false, why: 'last-step-called-tool' }
+  // 思考回声：正文和思考几乎是同一段话——模型把内部独白原样当成回答吐了出来。
+  // 这条必须排在 no-tool-anywhere 前面：纯问答轮同样会这样坏，坏了就得救。
+  if (isReasoningEcho(analysis.lastText, analysis.lastReasoning)) {
+    return { recover: true, why: 'reasoning-echo' }
+  }
   if (!analysis.anyToolCall) return { recover: false, why: 'no-tool-anywhere' }
 
   const text = (analysis.lastText ?? '').trim()
@@ -295,6 +322,7 @@ export function steerFor(why, cfg = DEFAULTS) {
   if (why === 'blank-after-tool') return cfg.steerTextBlank
   if (why === 'half-sentence') return cfg.steerTextHalf
   if (why === 'plan-tail' || why === 'leak-plan-tail') return cfg.steerTextPlan
+  if (why === 'reasoning-echo') return cfg.steerTextEcho
   if (why === 'leak-unclosed' || why === 'leak-no-body' || why === 'leak-inner-unclosed') return cfg.steerTextLeak
   return cfg.steerText
 }

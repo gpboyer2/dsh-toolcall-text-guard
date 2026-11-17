@@ -89,12 +89,12 @@ Four prerequisites. All four must pass before judging:
 
 Order of checks. First match wins:
 
-- Gates: `disabled` / `no-message` / `last-step-called-tool` / `no-tool-anywhere`
+- Gates: `disabled` / `no-message` / `last-step-called-tool` / `reasoning-echo` / `no-tool-anywhere`
 - Empty reply: `reasoning-only`, `blank-after-tool`
 - Leaked reasoning: `leak-unclosed`, `leak-no-body`, `leak-inner-unclosed`, `leak-residual-tag`, `leak-call-head`, `leak-has-body`
 - `text-too-long`, `maxChars` 8000
 - `tag-shape`, `tag-residual`, `json-tool-call`, `call-head`, `tag-head`, `half-sentence`
-- `plan-tail`, `leak-plan-tail`
+- `plan-tail`, `leak-plan-tail`, `reasoning-echo`
 - `looks-complete`
 
 `why` values:
@@ -113,6 +113,7 @@ Order of checks. First match wins:
 - `half-sentence`: ends on a comma, semicolon, colon, or dash. Nudge. Capped by `halfSentenceMax` 200.
 - `plan-tail`: every earlier step of the turn called a tool, and the last step only leaves a one-line hand-off such as "now I'll run the gates and review the diff". The action never happens. Judged on structure only: under 300 characters, no section headings, no trailing question mark, no links, no completion claim, no waiting words. Nudge.
 - `leak-plan-tail`: the same hand-off, but it follows a reasoning block (e.g. `<thought>...</thought>` then just "pushing this one now"). Nudge.
+- `reasoning-echo`: the reply and the reasoning are almost the same text (after whitespace is stripped, the shorter one is at least 85% of the longer, and both are at least 200 characters). In a normal reply the reasoning is private thinking and the reply is what the user reads; they should differ. When they are identical, the model has dumped its monologue into the answer. Nudge, and the "turn called a tool" gate does not apply.
 - `looks-complete`: the answer reads as finished. No nudge.
 
 Four nudges per turn at most. The plugin records the event count when it nudges. If the next judgment still wants a nudge and the count did not grow, it stops and writes a `give-up` line.
