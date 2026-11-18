@@ -94,6 +94,11 @@ export const DEFAULTS = {
     + '现在二选一：已经做完的，用「当前情况」（一句话说清状态）和「做了哪些」（你实际动了什么）两节汇报；'
     + '还没做完的，立刻发起下一步工具调用继续做，不要只描述计划。'
     + '如果你确实在等我回答、或者等子代理返回，就明说在等什么。',
+  /** 工具调用标签裸露在正文里时的提示。 */
+  steerTextExposed:
+    '你上一条回复把工具调用写成了正文，界面上能直接看到 <parameter>、</bash>、</thought> 这些标签，'
+    + '真正的调用没有发出去，所以这一轮被当成结束了。'
+    + '现在用真正的工具调用把这一步重新发一次（不要再写标签文本），然后继续把活干完。',
   /** 判一次写一行日志，便于事后倒查。 */
   debug: true,
   logFile: DEFAULT_LOG,
@@ -271,6 +276,40 @@ export function isLeakTailStub(text) {
 }
 
 /**
+ * 正文里裸露了本该被结构化的工具调用标签。
+ *
+ * 典型形态（真实会话 2026-11-17 20:34，ppll-polymarket 复核器那轮）：
+ *   现在看 B 的复核器核心逻辑——这是最需要挑刺的地方。<parameter></thought>
+ *   <bash> <parameter name="command">cd /Users/… </parameter>
+ *   <description>读复核器核心判定流程</description> </bash>
+ *   </thinking>
+ *
+ * 用户侧的现象最直观：正常时 DSH 把调用折成「已读取文件 / 执行了命令」卡片；
+ * 一旦这些标签肉眼可见地印在正文里，就说明调用退化成了文本、前端认不出来，
+ * 只能当 Markdown 摊开——DSH 那边同样收不到 tool_calls。
+ *
+ * 只认两个正常回答绝不会裸写的标记：`</parameter>` 与 `<parameter name=`。
+ */
+const EXPOSED_PARAM_ATTR = /<parameter\s+name\s*=/i
+/** 裸露的调用闭合标签；单次可能只是在讨论代码，两次以上才是真摊开了。 */
+const EXPOSED_PARAM_CLOSE = /<\/parameter>/gi
+/** 半句里裸露的思考闭合标签；正常输出最多在开头带一个空壳。 */
+const EXPOSED_THINK_CLOSE = /<\/\s*(?:thinking|thought)\s*>/gi
+
+export function isExposedCallTag(text) {
+  const raw = String(text ?? '')
+  if (!raw) return false
+  // 讨论代码时会把标签包在反引号或代码块里（我们排查插件时就常这么写）；
+  // 先剥掉，只看真正裸写在正文里的那些。
+  const t = raw.replace(/```[\s\S]*?```/g, ' ').replace(/`[^`\n]*`/g, ' ')
+  // 带属性的参数标签，正常回答绝不会裸写；出现即说明调用变成了正文。
+  if (EXPOSED_PARAM_ATTR.test(t)) return true
+  if ((t.match(EXPOSED_PARAM_CLOSE)?.length ?? 0) >= 2) return true
+  // 一个空壳 `<thinking> </thinking>` 是正常写法；两个以上说明思考块反复漏进正文。
+  return (t.match(EXPOSED_THINK_CLOSE)?.length ?? 0) >= 2
+}
+
+/**
  * 思考回声：正文和思考几乎是同一段话。
  * 正常回复里，思考是独白、正文是给用户的话，两者内容不同；
  * 一旦正文整段等于（或几乎等于）思考，说明模型把内部独白当成回答了。
@@ -417,6 +456,13 @@ export function decideRecovery(analysis, config = {}) {
   if (isDegenerateLeak(text)) return { recover: true, why: 'degenerate-leak' }
   if (isLeakTailStub(text)) return { recover: true, why: 'leak-tail-stub' }
 
+  // 标签裸露：正文里摊着本该被结构化的调用标签。
+  // 用户侧的现象是——正常时 DSH 把调用折成「已读取文件 / 执行了命令」卡片；
+  // 一旦这些标签肉眼可见地印在正文里，就说明调用退化成了文本，DSH 收不到 tool_calls。
+  // 这条比「缺两节」更早命中，也适用于任何通道；`</parameter>` 与 `<parameter name=`
+  // 正常回答绝不会裸写（讨论代码时会用行内代码包起来）。
+  // 必须排在下面那组精确判据之后，不能抢走 tag-residual / call-head。
+
   if (text.length > cfg.maxChars) return { recover: false, why: 'text-too-long' }
 
   // B. 残标签：整段只有一个标签，或标签开头且很短。
@@ -432,6 +478,10 @@ export function decideRecovery(analysis, config = {}) {
   if (text.length <= cfg.fragmentMax && TAG_HEAD.test(text)) {
     return { recover: true, why: 'tag-head' }
   }
+
+  // 标签裸露兜底：精确判据都没命中、正文里却摊着调用标签，同样算把调用写成了正文。
+  // 放在长度上限之前，是因为用户截图里那种几万字的退化长文也要能抓住。
+  if (isExposedCallTag(text)) return { recover: true, why: 'exposed-call-tag' }
 
   // C. 半句：停在逗号/分号/冒号/破折号上。
   if (text.length <= cfg.halfSentenceMax && HALF_TAIL.test(text)) {
@@ -450,6 +500,7 @@ export function decideRecovery(analysis, config = {}) {
 /** 按断法选话术。 */
 export function steerFor(why, cfg = DEFAULTS) {
   if (why === 'fuhua-no-report') return cfg.steerTextFuhua
+  if (why === 'exposed-call-tag') return cfg.steerTextExposed
   if (why === 'reasoning-only') return cfg.steerTextReasoning
   if (why === 'blank-after-tool') return cfg.steerTextBlank
   if (why === 'half-sentence') return cfg.steerTextHalf

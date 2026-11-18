@@ -27,6 +27,24 @@ test('前置门槛：不算断的情形', () => {
   assert.equal(decideRecovery(a('随便', { anyToolCall: false }), {}).why, 'no-tool-anywhere')
 })
 
+test('标签裸露：调用写成正文，判 exposed-call-tag', () => {
+  // 真实截图（ppll-polymarket 复核器那轮）：标签直接摊在正文里，用户肉眼可见
+  const exposed = '现在看 B 的复核器核心逻辑——这是最需要挑刺的地方。<parameter></thought> 前端改得对。\n\n'
+    + '<bash> <parameter name="command">cd /Users/peng/Desktop/Project/0-ppll/ppll-polymarket && sed -n \'330,470p\' backend/src/utils/x.js</parameter> <description>读复核器核心判定流程</description> </bash>\n</thinking>'
+  assert.equal(why(exposed, { steps: 20, priorToolRatio: 1 }), 'exposed-call-tag')
+  // 带属性的参数标签，出现即判
+  assert.equal(why('我先跑一下。\n<parameter name="command">ls -la', { steps: 5 }), 'exposed-call-tag')
+  // 两次以上裸露的思考闭合标签
+  assert.equal(why('前端改得对。</thought> 现在看核心逻辑。</thinking> 这一段还没说完，接着看判定流程。', { steps: 5 }), 'exposed-call-tag')
+})
+
+test('标签裸露：正常写法不许误伤', () => {
+  // 行内代码里引用一次标签，是在讨论代码
+  assert.notEqual(why('判据认的是 `</parameter>` 这个标记，两次以上才算。', { steps: 5 }), 'exposed-call-tag')
+  // 开头一个空壳 thinking，后面是正文
+  assert.notEqual(why('<thinking> </thinking>\n## 当前情况\n已改完。', { steps: 5 }), 'exposed-call-tag')
+})
+
 test('空回：一个字都没有 / 只有思考', () => {
   assert.equal(why(''), 'blank-after-tool')
   assert.equal(why('   \n  '), 'blank-after-tool')
