@@ -93,11 +93,14 @@ flowchart TD
 
 - 门槛：`disabled` / `no-message` / `last-step-called-tool` / `reasoning-echo` / `no-tool-anywhere`
 - 空回：`reasoning-only`、`blank-after-tool`
+- 浮华通道交付物：`fuhua-no-report`
 - 思考泄漏：`leak-unclosed`、`leak-no-body`、`leak-inner-unclosed`、`leak-residual-tag`、`leak-call-head`、`leak-has-body`
 - 退化重复泄漏：`degenerate-leak`
 - 收尾挂标签：`leak-tail-stub`
 - `text-too-long`，`maxChars` 8000
-- `tag-shape`、`tag-residual`、`json-tool-call`、`call-head`、`tag-head`、`half-sentence`
+- `tag-shape`、`tag-residual`、`json-tool-call`、`call-head`、`tag-head`
+- 标签裸露：`exposed-call-tag`
+- `half-sentence`
 - `plan-tail`、`leak-plan-tail`、`reasoning-echo`
 - `looks-complete`
 
@@ -111,7 +114,9 @@ flowchart TD
 - `leak-has-body`：标签闭合后有正文。不补话。
 - `degenerate-leak`：正文被同一句「接下来要做什么」反复改写、每行前面挂一个思考闭合标签（如会话 `324afd75` 第 2 轮第 38 步：748 字 / 18 行、17 个行首 `</thinking>`，越写越短，最后落到「先测。」就结束了）。这类重复会把长度撑过 `plan-tail` 的 300 字上限，让那条判据整段失效，所以单独兜住。判据只看结构：两行以上以闭合标签起头，且剥掉标签后仍有实际正文。以 `<analysis>` 等开标签起头的整段复盘不算，那种由 `leak-*` 按「闭合后有没有正文」处理。补话。
 - `leak-tail-stub`：末句后面拖着思考闭合标签，剥掉标签后只剩一句很短的话（不超过 80 字），如会话 `72688503` 第 1 轮第 20 步的「查一下依赖装在哪。</thinking></thinking>」——剥完只剩 9 个字。整轮 20 步都在调工具，这一步既没发起调用也没给结论，而 `plan-tail` 认不出它（那句里没有「现在/先」这类前缀词）。判据只看结构：标签落在结尾、剥掉后没有实质内容、不含标题/链接/完成态/等待词。补话。
-- `text-too-long`：正文超过 `maxChars` 8000。不补话。`leak-*` 不受这个上限约束。
+- `fuhua-no-report`：模型名以 `fuhua/` 或 `fuhua-mac/` 开头（浮华两个直连供应商），本回合调过工具，末步却没有「当前情况」「做了哪些」两节。这两个通道会把工具调用写成 `<tool_call>{...}</tool_call>` 正文，或让模型自称「没有工具可用」——DSH 收不到 `tool_calls` 就按设计结束这一轮。文本形态抓不完，所以改判交付物；确实在等人（含等子代理）或以问句收尾时放行。补话。
+- `exposed-call-tag`：正文里裸写着本该被结构化的调用标签——`<parameter name=…>`、两次以上的 `</parameter>`、两次以上的 `</thought>`。用户侧现象最直观：正常时 DSH 把调用折成「已读取文件 / 执行了命令」卡片，一旦这些标签肉眼可见地印在正文里，就说明调用退化成了文本，前端当 Markdown 摊开。判定先剥掉代码块与行内代码，避免把「讨论标签」当成退化。补话。
+- `text-too-long`：正文超过 `maxChars` 8000。不补话。`leak-*` 与 `exposed-call-tag` 不受这个上限约束。
 - `tag-shape`：整段就一个残缺标签。补话。
 - `tag-residual`：整段只有带属性的残标签，没有正文。补话。
 - `call-head`：整段从工具参数标签起头，标签后还带了正文，例如 `<parameter name="description" string="true">Check backend`。正常回复不会这样起头，这是把工具调用当正文写了。补话，不受 `fragmentMax` 约束。
@@ -122,7 +127,7 @@ flowchart TD
 - `reasoning-echo`：正文和思考几乎是同一段话（去掉空白后，短的那段不低于长的那段的 85%，且都不少于 200 字）。正常回复里思考是独白、正文是给用户的话，两者不该一样；一样就说明模型把内部独白当成回答吐出来了。补话，且不受「本回合调过工具」这条门槛限制。
 - `looks-complete`：看着说完了。不补话。
 
-每轮最多补 4 次。补话时记下当时的事件数。下一次还要补话、事件数却没涨，就停手，写一行 `give-up`。
+每轮最多补 6 次。补话时记下当时的事件数。下一次还要补话、事件数却没涨，就停手，写一行 `give-up`。
 
 次数和进度都按「会话 + 回合号」分开记。回合号是每个会话各自从 1 数的，若不带上会话，A 会话用掉的次数会算到 B 会话头上，B 一进来就被判「已经补过了」而直接停手。
 
@@ -141,7 +146,7 @@ flowchart TD
 | 字段 | 默认值 | 说明 |
 | --- | --- | --- |
 | `enabled` | `true` | 总开关 |
-| `maxContinuations` | `4` | 每轮最多补几次 |
+| `maxContinuations` | `6` | 每轮最多补几次 |
 | `halfSentenceMax` | `200` | 半句判定的长度上限 |
 | `fragmentMax` | `400` | 残片判定的长度上限 |
 | `maxChars` | `8000` | 普通长文超过就不再介入 |
