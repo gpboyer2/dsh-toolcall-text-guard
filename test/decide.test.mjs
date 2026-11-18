@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { decideRecovery, steerFor, analyzeTurn, apply, DEFAULTS, name } from '../index.js'
+import { decideRecovery, steerFor, analyzeTurn, apply, DEFAULTS, name, isFuhuaModel, hasReportSections, looksLikeWaiting } from '../index.js'
 
 /** 造一个「这一轮调过工具、但最后一步只吐文本」的分析结果。 */
 const a = (text, extra = {}) => ({
@@ -16,7 +16,7 @@ const why = (text, extra) => decideRecovery(a(text, extra), {}).why
 
 test('导出的插件名与默认配置', () => {
   assert.equal(name, 'toolcall-text-guard')
-  assert.equal(DEFAULTS.maxContinuations, 4)
+  assert.equal(DEFAULTS.maxContinuations, 6)
   assert.equal(DEFAULTS.enabled, true)
 })
 
@@ -31,6 +31,52 @@ test('空回：一个字都没有 / 只有思考', () => {
   assert.equal(why(''), 'blank-after-tool')
   assert.equal(why('   \n  '), 'blank-after-tool')
   assert.equal(why('', { lastReasoning: '我还在想' }), 'reasoning-only')
+})
+
+test('浮华通道识别', () => {
+  assert.equal(isFuhuaModel('fuhua/deepseek-v4.1-flash'), true)
+  assert.equal(isFuhuaModel('fuhua-mac/deepseek-v4.1-flash'), true)
+  assert.equal(isFuhuaModel('group/cherish-ai'), false)
+  assert.equal(isFuhuaModel('group/vigorously-ai'), false)
+  assert.equal(isFuhuaModel(null), false)
+})
+
+test('交付两节识别', () => {
+  assert.equal(hasReportSections('## 当前情况\n已好'), false)
+  assert.equal(hasReportSections('## 当前情况\n已改完。\n## 做了哪些\n- 抽函数'), true)
+  assert.equal(hasReportSections('**当前情况**：完成\n**做了哪些**：改了配置'), true)
+  assert.equal(hasReportSections('> 当前情况：完成\n> 做了哪些：改配置'), true)
+  assert.equal(hasReportSections('只有当前情况，没有下半节'), false)
+})
+
+test('浮华通道：干过活却没交两节，判中途退出', () => {
+  const f = 'fuhua-mac/deepseek-v4.1-flash'
+  // 真实断例一：只写一句过渡就停
+  assert.equal(why('先确认两件事：PAXG 的行情数据是否齐全（已确认 5m 有 1.75 万根），以及会不会被最小下单量卡住。', { lastModel: f }), 'fuhua-no-report')
+  // 真实断例二：工具调用写成 XML 正文
+  assert.equal(why('<tool_call>\n{"name": "bash", "arguments": {"command": "ls"}}\n</tool_call>', { lastModel: f }), 'fuhua-no-report')
+  // 真实断例三：思考片段漏进正文
+  assert.equal(why(' 的步骤，看是否与断点相关。\n\n这是关键实验。让我做。', { lastModel: f }), 'fuhua-no-report')
+  // 真实断例四：自称没有工具可用
+  assert.equal(why('当前会话没有提供可执行命令的工具，所以我无法直接查看。', { lastModel: 'fuhua/deepseek-v4.1-flash' }), 'fuhua-no-report')
+  // 两节齐全 -> 放行
+  assert.equal(why('## 当前情况\n\n已改完并验证，测试全绿。\n\n## 做了哪些\n\n- 抽了公共函数\n- 重跑了测试', { lastModel: f }), 'looks-complete')
+  // 等待态放行：等子代理
+  assert.equal(why('已经派了 3 个子代理，等任一结束腾出空位后继续。', { lastModel: f }), 'looks-complete')
+  // 等待态放行：把话头递给用户
+  assert.equal(why('你要我把上限调到 300 字吗？', { lastModel: f }), 'looks-complete')
+})
+
+test('浮华判据不影响其他通道', () => {
+  const text = '先确认两件事：PAXG 的行情数据是否齐全。'
+  assert.equal(why(text, { lastModel: 'group/cherish-ai', priorToolRatio: 1 }), 'plan-tail')
+  assert.equal(why(text, { lastModel: null, priorToolRatio: 1 }), 'plan-tail')
+})
+
+test('浮华通道用「补齐两节」那句补话', () => {
+  const msg = steerFor('fuhua-no-report', DEFAULTS)
+  assert.match(msg, /当前情况/)
+  assert.match(msg, /做了哪些/)
 })
 
 test('思考泄漏：四种形态', () => {

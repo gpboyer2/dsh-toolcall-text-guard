@@ -44,8 +44,8 @@ const DEFAULT_LOG = path.join(os.homedir(), '.dsh', 'logs', 'toolcall-guard.log'
 /** 默认配置。 */
 export const DEFAULTS = {
   enabled: true,
-  /** 每轮最多补救几次。 */
-  maxContinuations: 4,
+  /** 每轮最多补救几次。浮华通道不稳定，给到 6 次；probe 判定无进展会提前停手。 */
+  maxContinuations: 6,
   /** 半句判定的长度上限（超过这个长度就按正常正文对待）。 */
   halfSentenceMax: 200,
   /** 标签/JSON 残片判定的长度上限，避免把长解释当成调用。 */
@@ -88,6 +88,12 @@ export const DEFAULTS = {
   steerTextLeakTail:
     '你上一条回复在一句很短的话后面直接挂了思考闭合标签，那多半是思考写到一半漏进了正文，'
     + '动作还没发生。现在直接发起工具调用接着做；如果你本来要给结论，就把话说完整。',
+  /** 浮华通道只给了半截、没交出「当前情况 / 做了哪些」两节时的提示。 */
+  steerTextFuhua:
+    '你这一轮没有给出「当前情况」和「做了哪些」这两节，按约定这算没干完就停了。'
+    + '现在二选一：已经做完的，用「当前情况」（一句话说清状态）和「做了哪些」（你实际动了什么）两节汇报；'
+    + '还没做完的，立刻发起下一步工具调用继续做，不要只描述计划。'
+    + '如果你确实在等我回答、或者等子代理返回，就明说在等什么。',
   /** 判一次写一行日志，便于事后倒查。 */
   debug: true,
   logFile: DEFAULT_LOG,
@@ -179,6 +185,39 @@ export function isPlanTail(text) {
   if (PLAN_TAIL_WAIT.test(t)) return false
   if (RESIDUAL_TAGS_ONLY.test(t) || TAG_CALL_HEAD.test(t)) return false
   return PLAN_TAIL_ACT.test(t)
+}
+
+/**
+ * 浮华两个直连供应商（`fuhua/` 与 `fuhua-mac/`）。
+ *
+ * 这两个通道会把工具调用写成 `<tool_call>{...}</tool_call>` 这类正文，或者干脆
+ * 把 `tools` 字段吞掉让模型声称「没有工具可用」——两种情况 DSH 都收不到
+ * `tool_calls`，于是按设计把这一轮当成说完了。判据不能只看文本形态，
+ * 得改看交付物：干过活就必须交出「当前情况」和「做了哪些」两节。
+ */
+const FUHUA_PROVIDER = /^fuhua(?:-mac)?\//i
+
+export function isFuhuaModel(model) {
+  return typeof model === 'string' && FUHUA_PROVIDER.test(model.trim())
+}
+
+/** 「当前情况 / 做了哪些」两节，允许 `##`、`**`、`>` 这些常见写法，但必须落在行首。 */
+const SECTION_STATUS = /(?:^|\n)[\s>*#-]{0,6}当前情况/
+const SECTION_DONE = /(?:^|\n)[\s>*#-]{0,6}做了哪些/
+
+export function hasReportSections(text) {
+  const t = String(text ?? '')
+  return SECTION_STATUS.test(t) && SECTION_DONE.test(t)
+}
+
+/** 真的在等人或等子代理返回，允许就此收尾，不算中途退出。 */
+export function looksLikeWaiting(text) {
+  const t = String(text ?? '').trim()
+  if (!t) return false
+  if (PLAN_TAIL_WAIT.test(t)) return true
+  // 结尾是问句：话头已经递回给用户了。
+  if (/[？?]\s*$/.test(t)) return true
+  return false
 }
 
 /**
@@ -329,6 +368,14 @@ export function decideRecovery(analysis, config = {}) {
       : { recover: true, why: 'blank-after-tool' }
   }
 
+  // 浮华通道专用：干过活就必须交出「当前情况 / 做了哪些」两节，缺一则算中途退出。
+  // 这两个供应商返回的工具调用经常不是标准格式（写成 <tool_call> 正文、或 tools
+  // 被吞掉让模型自称没有工具），DSH 收不到 tool_calls 就当这一轮结束；文本形态
+  // 千变万化抓不完，所以改判交付物。只有「确实在等人/等子代理」才放行。
+  if (isFuhuaModel(analysis.lastModel) && !looksLikeWaiting(text) && !hasReportSections(text)) {
+    return { recover: true, why: 'fuhua-no-report' }
+  }
+
   // 思考泄漏：分四种，只看「有没有说完、有没有给出内容」。
   //   - 没闭合              → 说到一半，救；
   //   - 闭合了但后面没正文   → 只有复盘壳、没给你任何东西，救；
@@ -402,6 +449,7 @@ export function decideRecovery(analysis, config = {}) {
 
 /** 按断法选话术。 */
 export function steerFor(why, cfg = DEFAULTS) {
+  if (why === 'fuhua-no-report') return cfg.steerTextFuhua
   if (why === 'reasoning-only') return cfg.steerTextReasoning
   if (why === 'blank-after-tool') return cfg.steerTextBlank
   if (why === 'half-sentence') return cfg.steerTextHalf
