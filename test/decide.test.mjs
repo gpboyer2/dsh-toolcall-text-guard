@@ -45,6 +45,16 @@ test('标签裸露：正常写法不许误伤', () => {
   assert.notEqual(why('<thinking> </thinking>\n## 当前情况\n已改完。', { steps: 5 }), 'exposed-call-tag')
 })
 
+
+test('标签裸露：句子中间单个 </thinking> 就够', () => {
+  // 真实截图（会话 4b4eb158）：一句正文中间挂了闭合标签，然后交代下一步就停
+  const t = '先看 section 当前结构（批量买入卡片部分）。</thinking> 表格改完且类型通过。现在改外层区块。'
+  assert.equal(why(t, { steps: 12, priorToolRatio: 1, lastModel: 'fuhua-mac/deepseek-v4.1-flash' }), 'fuhua-no-report')
+  assert.equal(why(t, { steps: 12, priorToolRatio: 1, lastModel: 'group/cherish-ai' }), 'exposed-call-tag')
+  // 开头空壳 + 正常正文，不误伤
+  assert.notEqual(why('<thinking> </thinking>\n## 当前情况\n已改完。', { steps: 5 }), 'exposed-call-tag')
+})
+
 test('空回：一个字都没有 / 只有思考', () => {
   assert.equal(why(''), 'blank-after-tool')
   assert.equal(why('   \n  '), 'blank-after-tool')
@@ -83,6 +93,17 @@ test('浮华通道：干过活却没交两节，判中途退出', () => {
   assert.equal(why('已经派了 3 个子代理，等任一结束腾出空位后继续。', { lastModel: f }), 'looks-complete')
   // 等待态放行：把话头递给用户
   assert.equal(why('你要我把上限调到 300 字吗？', { lastModel: f }), 'looks-complete')
+})
+
+
+test('等待判定只看结尾：句中「要不要」不算等待', () => {
+  // 真实误判（会话 b3f01671 turn 2）：句中「再决定要不要动 Clash」把浮华判据整条挡掉
+  const t = '代理链路似乎断了。签到失败很可能就是这个原因，因为 Magpie 的请求会使用系统代理。先验证直连 MiniMax 是否正常，再决定要不要动 Clash。'
+  assert.equal(why(t, { steps: 8, priorToolRatio: 1, lastModel: 'fuhua-mac/deepseek-v4.1-flash' }), 'fuhua-no-report')
+  // 真在等子代理：放行
+  assert.equal(why('已经派了 3 个子代理，等任一结束腾出空位后继续。', { steps: 8, priorToolRatio: 1, lastModel: 'fuhua-mac/deepseek-v4.1-flash' }), 'looks-complete')
+  // 真在问用户：放行
+  assert.equal(why('你要我把上限调到 300 字吗？', { steps: 8, priorToolRatio: 1, lastModel: 'fuhua-mac/deepseek-v4.1-flash' }), 'looks-complete')
 })
 
 test('浮华判据不影响其他通道', () => {
@@ -354,7 +375,10 @@ test('收尾挂标签：有实质正文、纯标签、开标签起头都不许�
   // 闭合后没有正文：仍由既有 leak-no-body 兜住，不被新判据抢走
   const opened = '<analysis>查完了。</analysis>'
   assert.equal(decideRecovery(analyzeTurn(withTool(1, opened), 1)).why, 'leak-no-body')
-  // 标签在句中、后面还有正文：不是收尾挂标签
+  // 标签在句中、后面跟的是过渡语：这正是 4b4eb158 的断点形态，要救
   const midTag = '查一下依赖装在哪。</thinking>现在去查。'
-  assert.equal(decideRecovery(analyzeTurn(withTool(1, midTag), 1)).recover, false)
+  assert.equal(decideRecovery(analyzeTurn(withTool(1, midTag), 1)).recover, true)
+  // 但句中标签后面是实打实的正文、没有过渡语：不打扰
+  const midTagDone = '查完了。</thinking>结论是 v1 全站 410，只有 /v2/* 还活着，已经全部迁完并回归通过。'
+  assert.equal(decideRecovery(analyzeTurn(withTool(1, midTagDone), 1)).recover, false)
 })

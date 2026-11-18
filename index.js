@@ -215,14 +215,21 @@ export function hasReportSections(text) {
   return SECTION_STATUS.test(t) && SECTION_DONE.test(t)
 }
 
-/** 真的在等人或等子代理返回，允许就此收尾，不算中途退出。 */
+/**
+ * 真的在等人或等子代理返回，允许就此收尾，不算中途退出。
+ *
+ * 只看结尾，不看全文。整段里随便一个「要不要」不能算等待——真实误判
+ * （会话 b3f01671 turn 2）：「先验证直连 MiniMax 是否正常，再决定要不要动 Clash。」
+ * 这里「要不要」是它自己的计划，不是问用户，却把浮华判据整条挡掉了。
+ */
 export function looksLikeWaiting(text) {
   const t = String(text ?? '').trim()
   if (!t) return false
-  if (PLAN_TAIL_WAIT.test(t)) return true
   // 结尾是问句：话头已经递回给用户了。
   if (/[？?]\s*$/.test(t)) return true
-  return false
+  // 只检查结尾一小段，避免句中的「要不要/需要我」被当成等待。
+  const tail = t.slice(-80)
+  return /等待|稍等|静待|只等|等[^。；\n]{0,8}(它|他|她|你|您|我|子代理|任一|结果|消息|完成|回来|返回|结束|交付|汇报|回报|腾出|落地)/.test(tail)
 }
 
 /**
@@ -305,7 +312,18 @@ export function isExposedCallTag(text) {
   // 带属性的参数标签，正常回答绝不会裸写；出现即说明调用变成了正文。
   if (EXPOSED_PARAM_ATTR.test(t)) return true
   if ((t.match(EXPOSED_PARAM_CLOSE)?.length ?? 0) >= 2) return true
-  // 一个空壳 `<thinking> </thinking>` 是正常写法；两个以上说明思考块反复漏进正文。
+  /**
+   * 句子中间冒出思考闭合标签，而且剥掉标签后剩下的是一句过渡语。
+   * 真实形态（会话 4b4eb158，用户截图）：
+   *   「先看 section 当前结构（批量买入卡片部分）。</thinking> 表格改完且类型通过。现在改外层区块。」
+   * 它交代了下一步就停，队列里的下一个任务立刻接管——这就是用户看到的「无缝换人」。
+   * 只看「句中标签 + 过渡语」，长正文末尾带个尾巴标签不算。
+   */
+  if (/[^\n<>]\s*<\/\s*(?:thinking|thought)\s*>/i.test(t)) {
+    const bare = t.replace(LEAK_TAGS_ALL, ' ').replace(/\s+/g, ' ').trim()
+    if (isPlanTail(bare)) return true
+  }
+  // 两个以上闭合标签（哪怕都落在行首）同样说明思考块反复漏进正文。
   return (t.match(EXPOSED_THINK_CLOSE)?.length ?? 0) >= 2
 }
 
