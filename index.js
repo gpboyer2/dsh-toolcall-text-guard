@@ -24,6 +24,7 @@
  * @module dsh-toolcall-text-guard
  */
 
+import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -423,13 +424,20 @@ function appendLog(file, line) {
   }
 }
 
-/** 兼容旧内核：拿不到 createUserMessage 时手搓一个符合形状的用户消息。 */
+/**
+ * 兼容旧内核：拿不到 createUserMessage 时手搓一个符合形状的用户消息。
+ *
+ * 必须有 id。会话日志按消息 id 认消息，缺 id 的 user/message 落盘当时不报错，
+ * 但下次载入会抛 "session event at seq N lacks an identified message"，
+ * 把整个会话打成 corrupt（历史再也打不开）。所以这里和内核 createMessage
+ * 保持一致：role/content/source + randomUUID，不要塞 time（内核不写这个字段）。
+ */
 function fallbackUserMessage(spec) {
   return {
     role: 'user',
     content: spec.content,
     source: spec.source,
-    time: Date.now(),
+    id: randomUUID(),
   }
 }
 
