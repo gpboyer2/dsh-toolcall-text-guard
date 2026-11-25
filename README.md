@@ -1,179 +1,157 @@
 # dsh-toolcall-text-guard
 
-English → [README.en.md](README.en.md)
+> **它写下 `turn/end completed`，不代表活干完了。** —— 在收尾那一刻拦下「没说完就收工」，用一句提示把同一回合接回去。
 
-## 适合你吗？
+[简体中文](README.md) · [English](README.en.md)
 
-聊到一半，它突然不动了，你用 DSH 跑长任务，界面干着干着停住。
+![DSH](https://img.shields.io/badge/DSH-DeepSeek%20Harness-1F6FEB?style=flat-square)
+![Node.js](https://img.shields.io/badge/Node.js-22%2B-339933?style=flat-square&logo=node.js&logoColor=white)
+![JavaScript](https://img.shields.io/badge/JavaScript-ESM-F7DF1E?style=flat-square&logo=javascript&logoColor=black)
+![Cordis](https://img.shields.io/badge/Cordis-plugin-FF6B6B?style=flat-square)
+![tests](https://img.shields.io/badge/tests-35-brightgreen?style=flat-square)
+![license](https://img.shields.io/badge/license-MIT-brightgreen?style=flat-square)
+
+一个 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）插件。长任务跑到一半突然停住，界面还停在原地，回合却已经结束。插件挂在 `agent/turn-stopping`，按结构判最后一步是不是真说完了；没说完就往同一回合补一句，让它继续。
+
+## 它解决什么问题
+
+你派一件要分几步干完的活，它干着干着不动了，界面停住，但回合照常写下 `turn/end completed`。
 
 - 再发一句「继续」，它又接上。装。
-- 活儿没干完，这一回合却被当成「说完了」收掉了。插件在收尾那一刻拦下来。能救。
-- 进程直接崩掉、事件流断在半截。没有介入时机。救不了。别装。
-- 整轮没调过工具的普通问答，不用装。
-- 和内置的 `@deepseek-ai/dsh-text-toolcall-guard` 不冲突。那个只管行首 `<tool_call>` 标记一种形态。
+- 活儿没干完，这一回合却被当成「说完了」收掉了。插件在收尾那一刻拦下来，能救。
+- 进程直接崩掉、事件流断在半截。没有介入时机，救不了。别装。
+- 整轮没调过工具的普通问答。不用装。
+- 和内置的 `@deepseek-ai/dsh-text-toolcall-guard` 不冲突：那个只管行首 `<tool_call>` 标记一种形态。
 
-结尾有没有 `turn/end completed`，只用来分「进程还活着」和「进程崩了」，不是判定条件。回合照常写下 `turn/end completed`、界面却已经停住，正是最常见的那种断法。
+结尾有没有 `turn/end completed`，只用来分「进程还活着」和「进程崩了」，不是判定条件。界面已经停住、回合却写完了，正是最常见的那种断法。
+
+## 工作原理
+
+```mermaid
+flowchart TD
+    N1["1 你发话"] --> N2["2 DSH 起回合"]
+    N2 --> N3["3 模型继续干活：写思考、写正文，或发起真实工具调用"]
+    N3 --> N4["4 收尾前检查点：agent/turn-stopping，在 turn/end 之前"]
+    N4 --> N5{"5 前置门槛：开关 / 有消息 / 最后一步没调工具 / 本回合调过工具"}
+    N5 -->|四条全过| N6{"6 按顺序判最后一步"}
+    N5 -->|任一不过| N9["9 回合收尾"]
+    N6 -->|命中某种断法| N7{"7 次数与退化护栏"}
+    N6 -->|没命中| N9
+    N7 -->|未到 6 次且有效| N8["8 用 agent.steer 补一句，按断法选文案"]
+    N7 -->|到 6 次或补救无效| N9
+    N8 -->|补话后| N3
+```
+
+- **前置门槛**，四条全过才判定：开关打开、本回合有消息、本回合至少发生过一次真实 `tool-call`、最后一步没有 `tool-call`。例外：`reasoning-echo` 不受「本回合调过工具」这条约束，纯问答轮同样会把思考写成正文。
+- **只判结构**：不调裁判模型，不花额外 token。数据就是本回合的事件流。
+- **补话用 `agent.steer`**：向同一回合补一句，按断法选文案，不新起回合。
+- **有护栏**：每轮最多补 6 次；补话时记下当时事件数，下次还要补、事件数却没涨，就停手并写一行 `give-up`。次数与进度按「会话 + 回合号」分开记，A 会话用掉的次数不会算到 B 头上。
+
+## 它认得的断法
+
+判定按顺序走，命中就停。按组看：
+
+| 组 | 判定 | 补话? |
+| --- | --- | --- |
+| 门槛 | `disabled` / `no-message` / `last-step-called-tool` / `no-tool-anywhere` | 否 |
+| 空回 | `reasoning-only`、`blank-after-tool` | 是 |
+| 浮华通道交付物 | `fuhua-no-report`：模型名以 `fuhua/` 或 `fuhua-mac/` 开头，调过工具但末步没有「当前情况」「做了哪些」两节 | 是 |
+| 思考泄漏 | `leak-unclosed`、`leak-no-body`、`leak-inner-unclosed`、`leak-residual-tag`、`leak-call-head`、`leak-has-body` | 前五个是，`leak-has-body` 否 |
+| 退化重复泄漏 | `degenerate-leak`：两行以上以闭合标签起头，剥掉标签仍有正文 | 是 |
+| 收尾挂标签 | `leak-tail-stub`：末句拖一个思考闭合标签，剥完不超过 80 字、无实质内容 | 是 |
+| 长文 | `text-too-long`：正文超过 `maxChars` 8000 | 否 |
+| 残片 | `tag-shape`、`tag-residual`、`json-tool-call`、`call-head`、`tag-head` | 是 |
+| 标签裸露 | `exposed-call-tag`：正文里肉眼可见 `<parameter name=…>`、两次以上 `</parameter>`、两次以上 `</thought>` | 是 |
+| 半句 | `half-sentence`：停在逗号、分号、冒号、破折号上，不超过 200 字 | 是 |
+| 计划尾巴 | `plan-tail`、`leak-plan-tail`：整轮在调工具，末步只留「现在/接着/最后 + 要做的事」，说完就停。不超过 300 字、无标题、无链接、不问号收尾、不说完成、不含等待词 | 是 |
+| 思考复读 | `reasoning-echo`：正文和思考几乎是同一段话（短的不低于长的 85%，且都 ≥200 字） | 是 |
+| 看着说完了 | `looks-complete` | 否 |
+
+标签裸露是最直观的一种：正常时 DSH 把调用折成「已读取文件 / 执行了命令」卡片，一旦这些标签肉眼可见地印在正文里，就说明调用退化成了文本。判定先剥掉代码块与行内代码，避免把「讨论标签」当成退化。
 
 ## 快速开始
-
-三步装好，然后重启。
 
 ```sh
 # 1. 克隆到 ~/.dsh/plugins/dsh-toolcall-text-guard
 git clone https://github.com/gpboyer2/dsh-toolcall-text-guard.git ~/.dsh/plugins/dsh-toolcall-text-guard
 
-# 2. 注册到 desktop profile
-dsh plugin --profile desktop add link:$HOME/.dsh/plugins/dsh-toolcall-text-guard
+# 2. 注册到 profile（命令行管理的 profile，如 web / main）
+dsh plugin --profile <你的profile> add link:$HOME/.dsh/plugins/dsh-toolcall-text-guard
 
 # 3. 重启 DSH
 ```
 
-重启后跑一轮，看 `~/.dsh/logs/toolcall-guard.log` 有没有新增行。有新增行就是加载成功。
+> `desktop` profile 由 DeepSeek Harness.app 独占，命令行 `dsh plugin --profile desktop …` 会被拒。桌面版在应用内「插件」页安装，或手动改 profile 的 `dependencies` + 软链后重启。
 
-`package.json` 的 `dsh.bundle.patch` 指向自带的 `cordis.patch.yml`，会自动插入层栈。不用手改 profile 的 patch 文件。
+包内的 `cordis.patch.yml` 会自动插入层栈，不用手改 profile 的 patch 文件。
 
-## 流程图
+**验证**：重启后跑一轮，看 `~/.dsh/logs/toolcall-guard.log` 有没有新增行。有新增行就是加载成功。
 
-从你发话开始，到回合正常结束，一共 9 步。
+## 核心功能
 
-```mermaid
-flowchart TD
-    N1["1 你发话<br/>给 DSH 派一件要分几步干完的活"]
-    N2["2 DSH 起回合<br/>进入回合循环，模型开始一步步产出"]
-    subgraph LOOP["一轮 = 步骤 3 → 8"]
-        N3["3 模型继续干活<br/>写思考、写正文，或发起真实工具调用"]
-        N4["4 收尾前的检查点<br/>挂在 agent/turn-stopping，在 turn/end 之前"]
-        N5{"5 前置门槛<br/>开关打开；本回合有消息；最后一步没调用工具；本回合至少调用过一次工具"}
-        N6{"6 按顺序判最后一步<br/>空回 → 思考泄漏 → 长文上限 → 残片 → 半句 → 看着说完了；数据＝本回合事件流"}
-        N7{"7 次数与退化护栏<br/>本轮已补不足 4 次；上次补话有没有产生新内容"}
-        N8["8 补一句提示再走一步<br/>用 agent.steer 向同一回合补一句，按断法选文案"]
-    end
-    N9["9 回合收尾<br/>写下 turn/end completed；这一笔只说明回合走完了，不说明活儿干完了"]
+| 能力 | 说明 |
+| --- | --- |
+| **结构判定** | 只看本回合事件结构，不调裁判模型，不花额外 token。 |
+| **同一回合接回** | 用 `agent.steer` 补一句，不新起回合、不丢上下文。 |
+| **按断法选文案** | 空回、半句、标签泄漏、计划尾巴各有各的提示。 |
+| **两类门槛** | 本回合调过工具（`reasoning-echo` 例外）、末步没调工具，避免误伤正常收尾。 |
+| **次数护栏** | 每轮最多 6 次；补救后事件数没涨就停手，写 `give-up`。 |
+| **按会话分账** | 次数与进度按「会话 + 回合号」记，不会串会话。 |
+| **可关** | `enabled: false` 或 `debug: false`，日志一行不写。 |
+| **零依赖** | 只用 DSH 注入的服务与 Node 内置模块。 |
 
-    N1 -->|派活后| N2
-    N2 -->|回合开始| N3
-    N3 -->|本轮要收尾| N4
-    N4 -->|进入判定| N5
-    N5 -->|四条全过| N6
-    N5 -->|任一不过，从容器边界跳出| N9
-    N6 -->|命中某种断法| N7
-    N6 -->|没命中，从容器边界跳出| N9
-    N7 -->|未到 4 次且有效| N8
-    N7 -->|到 4 次或补救无效，从容器边界跳出| N9
-    N8 -->|补话后回到第 3 步| N3
-    style LOOP fill:#ffffff,stroke:#5F5E5A,stroke-dasharray:6 4
-```
+## 配置
 
-按编号看：
+| 字段 | 默认值 | 说明 |
+| --- | --- | --- |
+| `enabled` | `true` | 总开关。 |
+| `maxContinuations` | `6` | 每轮最多补几次。 |
+| `halfSentenceMax` | `200` | 半句判定的长度上限。 |
+| `fragmentMax` | `400` | 残片判定的长度上限。 |
+| `maxChars` | `8000` | 普通长文超过就不再介入。 |
+| `debug` | `true` | 每判一次写一行日志。 |
+| `logFile` | `~/.dsh/logs/toolcall-guard.log` | 日志位置。 |
+| `steerText*` | 见 `index.js` | 各类断法的补话文案。 |
 
-- 1 你发话：给 DSH 派一件要分几步干完的活。去 2。
-- 2 DSH 起回合：进入回合循环，模型开始一步步产出。去 3。
-- 3 模型继续干活：写思考、写正文，或发起真实工具调用。去 4；第 8 步补话后回到这一步。
-- 4 收尾前的检查点：挂在 `agent/turn-stopping`，在 `turn/end` 之前。去 5。
-- 5 前置门槛：四条全过去 6；任一不过，从循环容器边界跳出，去 9。
-- 6 按顺序判最后一步：命中某种断法去 7；没命中，从循环容器边界跳出，去 9。
-- 7 次数与退化护栏：未到 4 次且有效去 8；到 4 次或补救无效，从循环容器边界跳出，去 9。
-- 8 补一句提示再走一步：用 `agent.steer` 向同一回合补一句，按断法选文案。回到 3。
-- 9 回合收尾：写下 `turn/end completed`。这一笔只说明回合走完了，不说明活儿干完了。
+`steerText*` 指 `steerText`、`steerTextBlank`、`steerTextReasoning`、`steerTextHalf`、`steerTextLeak`。
 
-## 功能与原理
+## 日志
 
-插件挂在 `agent/turn-stopping`，在 `turn/end` 写入之前动手。判定只看本回合的事件结构，不看结尾状态：回合照常会写下 `turn/end completed`，界面上却已经停住，这正是插件要拦的情形。
-
-前置门槛，四条全过才判定：
-
-- 开关打开。
-- 本回合有消息。
-- 本回合至少发生过一次真实 `tool-call`。
-- 最后一步没有 `tool-call`。
-
-例外：`reasoning-echo` 不受第二条约束——纯问答轮（整轮没调过工具）同样会把思考写成正文，那种坏输出也得救。
-
-判定按顺序走，命中就停：
-
-- 门槛：`disabled` / `no-message` / `last-step-called-tool` / `reasoning-echo` / `no-tool-anywhere`
-- 空回：`reasoning-only`、`blank-after-tool`
-- 浮华通道交付物：`fuhua-no-report`
-- 思考泄漏：`leak-unclosed`、`leak-no-body`、`leak-inner-unclosed`、`leak-residual-tag`、`leak-call-head`、`leak-has-body`
-- 退化重复泄漏：`degenerate-leak`
-- 收尾挂标签：`leak-tail-stub`
-- `text-too-long`，`maxChars` 8000
-- `tag-shape`、`tag-residual`、`json-tool-call`、`call-head`、`tag-head`
-- 标签裸露：`exposed-call-tag`
-- `half-sentence`
-- `plan-tail`、`leak-plan-tail`、`reasoning-echo`
-- `looks-complete`
-
-`why` 取值：
-
-- `disabled`、`no-message`、`last-step-called-tool`、`no-tool-anywhere`：门槛没过，不补话。
-- `reasoning-only`、`blank-after-tool`：只思考不落字、调完工具一个字没说。补话。
-- `leak-unclosed`、`leak-no-body`、`leak-inner-unclosed`：思考标签没闭合、闭合后没正文、又开一个没闭合。补话。
-- `leak-residual-tag`：标签闭合后只剩一串残标签，一个字正文都没有。补话。
-- `leak-call-head`：标签闭合后跟的是一个从工具参数标签起头、还带了正文的调用，如 `<parameter name="bash">` 后接命令却没收尾。补话。
-- `leak-has-body`：标签闭合后有正文。不补话。
-- `degenerate-leak`：正文被同一句「接下来要做什么」反复改写、每行前面挂一个思考闭合标签（如会话 `324afd75` 第 2 轮第 38 步：748 字 / 18 行、17 个行首 `</thinking>`，越写越短，最后落到「先测。」就结束了）。这类重复会把长度撑过 `plan-tail` 的 300 字上限，让那条判据整段失效，所以单独兜住。判据只看结构：两行以上以闭合标签起头，且剥掉标签后仍有实际正文。以 `<analysis>` 等开标签起头的整段复盘不算，那种由 `leak-*` 按「闭合后有没有正文」处理。补话。
-- `leak-tail-stub`：末句后面拖着思考闭合标签，剥掉标签后只剩一句很短的话（不超过 80 字），如会话 `72688503` 第 1 轮第 20 步的「查一下依赖装在哪。</thinking></thinking>」——剥完只剩 9 个字。整轮 20 步都在调工具，这一步既没发起调用也没给结论，而 `plan-tail` 认不出它（那句里没有「现在/先」这类前缀词）。判据只看结构：标签落在结尾、剥掉后没有实质内容、不含标题/链接/完成态/等待词。补话。
-- `fuhua-no-report`：模型名以 `fuhua/` 或 `fuhua-mac/` 开头（浮华两个直连供应商），本回合调过工具，末步却没有「当前情况」「做了哪些」两节。这两个通道会把工具调用写成 `<tool_call>{...}</tool_call>` 正文，或让模型自称「没有工具可用」——DSH 收不到 `tool_calls` 就按设计结束这一轮。文本形态抓不完，所以改判交付物；确实在等人（含等子代理）或以问句收尾时放行。补话。
-- `exposed-call-tag`：正文里裸写着本该被结构化的调用标签——`<parameter name=…>`、两次以上的 `</parameter>`、两次以上的 `</thought>`。用户侧现象最直观：正常时 DSH 把调用折成「已读取文件 / 执行了命令」卡片，一旦这些标签肉眼可见地印在正文里，就说明调用退化成了文本，前端当 Markdown 摊开。判定先剥掉代码块与行内代码，避免把「讨论标签」当成退化。补话。
-- `text-too-long`：正文超过 `maxChars` 8000。不补话。`leak-*` 与 `exposed-call-tag` 不受这个上限约束。
-- `tag-shape`：整段就一个残缺标签。补话。
-- `tag-residual`：整段只有带属性的残标签，没有正文。补话。
-- `call-head`：整段从工具参数标签起头，标签后还带了正文，例如 `<parameter name="description" string="true">Check backend`。正常回复不会这样起头，这是把工具调用当正文写了。补话，不受 `fragmentMax` 约束。
-- `json-tool-call`、`tag-head`：短文本里的 JSON 调用残片、标签开头。补话。两个都受 `fragmentMax` 400 约束。
-- `half-sentence`：停在逗号、分号、冒号、破折号上。补话。受 `halfSentenceMax` 200 约束。
-- `plan-tail`：整轮都在调工具，最后一步只留一句「现在/接着/最后 + 要做的事」，说完就停，动作没发生，如「现在跑门禁并逐文件审 diff。」。判据只看结构：本回合至少 3 步（短轮次同样会这样断——会话 `a2bf67e8` 的 turn 3 只有 3 步，末句是「我先把这两条到底是什么查清楚，再定修法。」）、文本不超过 300 字、没有章节标题、不以问号收尾、不带链接、不说已完成、不含等待词（含「等任一子代理结束」「现在只等 X 落地」这类）。补话。
-- `leak-plan-tail`：思考块后面跟的也是这种过渡语（如 `<thought>…</thought>` 后只写「先推送这一笔。」）。补话。
-- `reasoning-echo`：正文和思考几乎是同一段话（去掉空白后，短的那段不低于长的那段的 85%，且都不少于 200 字）。正常回复里思考是独白、正文是给用户的话，两者不该一样；一样就说明模型把内部独白当成回答吐出来了。补话，且不受「本回合调过工具」这条门槛限制。
-- `looks-complete`：看着说完了。不补话。
-
-每轮最多补 6 次。补话时记下当时的事件数。下一次还要补话、事件数却没涨，就停手，写一行 `give-up`。
-
-次数和进度都按「会话 + 回合号」分开记。回合号是每个会话各自从 1 数的，若不带上会话，A 会话用掉的次数会算到 B 会话头上，B 一进来就被判「已经补过了」而直接停手。
-
-每判一次写一行日志。合成示例，字段已占位：
+每判一次写一行，字段固定：
 
 ```text
 <时间> | turn=<回合号> | step=<步数> | why=<判定> | recover=<true|false> | model=<模型名> | used=<已补次数> | text="<前 80 字，已占位>"
 ```
 
-判定只看结构。不调裁判模型，不花额外 token。
-
-## 其他
-
-默认值如下。改完重启才生效。
-
-| 字段 | 默认值 | 说明 |
-| --- | --- | --- |
-| `enabled` | `true` | 总开关 |
-| `maxContinuations` | `6` | 每轮最多补几次 |
-| `halfSentenceMax` | `200` | 半句判定的长度上限 |
-| `fragmentMax` | `400` | 残片判定的长度上限 |
-| `maxChars` | `8000` | 普通长文超过就不再介入 |
-| `debug` | `true` | 每判一次写一行日志 |
-| `logFile` | `~/.dsh/logs/toolcall-guard.log` | 日志位置 |
-| `steerText*` | 见 `index.js` | 各类断法的补话文案 |
-
-`steerText*` 指 `steerText`、`steerTextBlank`、`steerTextReasoning`、`steerTextHalf`、`steerTextLeak`。
-
 `debug` 默认 `true`。最后一步文本的前 80 字会进日志。日志只在本机，不上传。`debug: false` 一行都不写，含 `give-up` 和 `steer-failed`。想换位置就改 `logFile`。
 
-测试：
+## 架构
+
+```
+index.js              插件全部逻辑：turn-stopping 监听、结构判定、护栏、steer 补话、日志
+cordis.patch.yml      bundle patch：插入层栈
+test/                 35 条测试（判定、日志、消息形态）
+```
+
+设计约束：只在 `agent/turn-stopping` 这个点上介入；不读文件、不建会话、不改回合状态。
+
+## 开发与测试
 
 ```sh
 npm test
 node --test test/*.test.mjs
 ```
 
-14 个测试。
+35 条：各类断法的判定与误判边界、次数护栏与 `give-up`、日志字段与 `debug: false`、消息形态。
 
-局限：
+## 已知边界
 
-- 进程真崩救不了。事件流断在半截、没有写入收尾记录，插件没有介入时机。
-- 只认见过的形态。
-- 模型连续不听就停手。最多 4 次，没新内容也停手。
-- 必须重启才生效。
+- **进程真崩救不了**：事件流断在半截、没有写入收尾记录，插件没有介入时机。
+- **只认见过的形态**：新出现的断法要么它认不出，要么被 `looks-complete` 放行；补一个判据即可。
+- **模型连续不听就停手**：每轮最多 6 次，事件数没涨也停手。
+- **必须重启才生效**：host 半是进程内模块。
+- **依赖 `agent/turn-stopping` 接缝**：上游改这个事件点就得跟着改。
 
 ## 许可证
 
-MIT。全文见 [MIT](LICENSE)。
+[MIT](LICENSE)

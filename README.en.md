@@ -1,172 +1,157 @@
 # dsh-toolcall-text-guard
 
-中文 → [README.md](README.md)
+> **Writing `turn/end completed` does not mean the work is done.** —— It stops "calling it done before finishing" at the moment of wrap-up, and puts the same turn back on track with one hint.
 
-## Is this for you?
+[English](README.en.md) · [简体中文](README.md)
 
-Mid-conversation it just stops moving, and you run long jobs in DSH — the UI freezes while the work is still going.
+![DSH](https://img.shields.io/badge/DSH-DeepSeek%20Harness-1F6FEB?style=flat-square)
+![Node.js](https://img.shields.io/badge/Node.js-22%2B-339933?style=flat-square&logo=node.js&logoColor=white)
+![JavaScript](https://img.shields.io/badge/JavaScript-ESM-F7DF1E?style=flat-square&logo=javascript&logoColor=black)
+![Cordis](https://img.shields.io/badge/Cordis-plugin-FF6B6B?style=flat-square)
+![tests](https://img.shields.io/badge/tests-35-brightgreen?style=flat-square)
+![license](https://img.shields.io/badge/license-MIT-brightgreen?style=flat-square)
+
+A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) plugin. A long task stops halfway, the UI sits still, but the turn has already ended. The plugin hooks `agent/turn-stopping` and decides by structure whether the last step really finished. If not, it appends one sentence to the same turn and keeps it going.
+
+## What it solves
+
+You hand over a job that takes several steps. It works for a while, then stops moving. The UI freezes, but the turn writes `turn/end completed` as usual.
 
 - Send one more "continue" and it picks up again. Install it.
-- The work was not done, yet the turn was closed as "finished". The plugin catches it right as the turn is being closed. Recoverable.
-- The process dies outright and the event stream is cut in half. There is no moment to step in. Not recoverable. Skip it.
-- Plain Q&A turns that never called a tool. Skip it.
-- It does not clash with `@deepseek-ai/dsh-text-toolcall-guard`. That one covers one shape only: a `<tool_call>` tag at the start of a line.
+- The work is not done, yet the turn is taken as "finished" and closed. The plugin intercepts at the moment of wrap-up. This can be saved.
+- The process crashes outright, the event stream breaks mid-way. There is no moment to intervene, so it cannot be saved. Don't install it.
+- A plain Q&A turn that never called a tool. No need to install.
+- No conflict with the built-in `@deepseek-ai/dsh-text-toolcall-guard`: that one only covers one form, a `<tool_call>` marker at the start of a line.
 
-Whether the stream ends with `turn/end completed` only tells "the process is alive" apart from "the process died"; it is not a criterion. The turn writes `turn/end completed` as usual while the UI has already frozen — that is the most common way it breaks.
+Whether `turn/end completed` appears at the end only separates "the process is still alive" from "the process crashed". It is not a decision condition. The UI has stopped while the turn is written complete — that is the most common kind of break.
+
+## How it works
+
+```mermaid
+flowchart TD
+    N1["1 You speak"] --> N2["2 DSH starts a turn"]
+    N2 --> N3["3 The model keeps working: writes reasoning, writes text, or makes a real tool call"]
+    N3 --> N4["4 Checkpoint before wrap-up: agent/turn-stopping, before turn/end"]
+    N4 --> N5{"5 Gates: enabled / has a message / last step made no tool call / this turn made a tool call"}
+    N5 -->|all four pass| N6{"6 Check the last step in order"}
+    N5 -->|any fails| N9["9 Turn wraps up"]
+    N6 -->|matches a break type| N7{"7 Count and degeneration guard"}
+    N6 -->|no match| N9
+    N7 -->|under 6 times and effective| N8["8 Steer one sentence with agent.steer, text chosen by break type"]
+    N7 -->|6 times reached or recovery ineffective| N9
+    N8 -->|after steering| N3
+```
+
+- **Gates**, all four must pass before any check: the switch is on, this turn has a message, this turn made at least one real `tool-call`, and the last step made no `tool-call`. Exception: `reasoning-echo` is not bound by "this turn called a tool"; a pure Q&A turn can also write its reasoning into the body.
+- **Structure only**: no judge model, no extra tokens. The data is this turn's event stream.
+- **Steer with `agent.steer`**: append one sentence to the same turn, text chosen by break type, no new turn.
+- **Guards**: at most 6 steers per round. On each steer it records the event count; if another steer is needed and the count has not grown, it stops and writes one `give-up` line. Count and progress are kept per "session + turn number", so counts used in session A do not land on session B.
+
+## Break types it recognizes
+
+Checks run in order and stop at the first match. By group:
+
+| Group | Check | Steer? |
+| --- | --- | --- |
+| Gate | `disabled` / `no-message` / `last-step-called-tool` / `no-tool-anywhere` | No |
+| Empty reply | `reasoning-only`, `blank-after-tool` | Yes |
+| Fuhua-channel deliverable | `fuhua-no-report`: the model name starts with `fuhua/` or `fuhua-mac/`, a tool was called, but the last step has no "Current status" and "What was done" sections | Yes |
+| Reasoning leak | `leak-unclosed`, `leak-no-body`, `leak-inner-unclosed`, `leak-residual-tag`, `leak-call-head`, `leak-has-body` | The first five yes, `leak-has-body` no |
+| Degenerate repeated leak | `degenerate-leak`: two or more lines start with a closing tag, and body text remains after stripping the tag | Yes |
+| Trailing tag at wrap-up | `leak-tail-stub`: the last sentence drags a reasoning closing tag; after stripping it is no more than 80 chars with no substantive content | Yes |
+| Long text | `text-too-long`: body exceeds `maxChars` 8000 | No |
+| Fragment | `tag-shape`, `tag-residual`, `json-tool-call`, `call-head`, `tag-head` | Yes |
+| Exposed tags | `exposed-call-tag`: `<parameter name=…>`, two or more `</parameter>`, or two or more `</thought>` visible in the body | Yes |
+| Half sentence | `half-sentence`: stops on a comma, semicolon, colon, or dash, no more than 200 chars | Yes |
+| Plan tail | `plan-tail`, `leak-plan-tail`: the whole turn is calling tools, and the last step leaves only "now / next / finally + what to do", then stops. No more than 300 chars, no heading, no link, no closing question mark, no statement of completion, no waiting word | Yes |
+| Reasoning echo | `reasoning-echo`: body and reasoning are almost the same passage (the shorter is at least 85% of the longer, and both are ≥200 chars) | Yes |
+| Looks finished | `looks-complete` | No |
+
+Exposed tags is the most direct kind: normally DSH folds calls into "read file / ran command" cards, and once these tags are visibly printed in the body, the call has degenerated into text. The check strips code blocks and inline code first, so that "discussing tags" is not mistaken for degeneration.
 
 ## Quick start
-
-Three steps. Then restart.
 
 ```sh
 # 1. Clone into ~/.dsh/plugins/dsh-toolcall-text-guard
 git clone https://github.com/gpboyer2/dsh-toolcall-text-guard.git ~/.dsh/plugins/dsh-toolcall-text-guard
 
-# 2. Add it to the desktop profile
-dsh plugin --profile desktop add link:$HOME/.dsh/plugins/dsh-toolcall-text-guard
+# 2. Register with a profile (a CLI-managed profile, such as web / main)
+dsh plugin --profile <your-profile> add link:$HOME/.dsh/plugins/dsh-toolcall-text-guard
 
 # 3. Restart DSH
 ```
 
-Restart, run one turn, then check `~/.dsh/logs/toolcall-guard.log` for a new line. A new line means it loaded.
+> The `desktop` profile is owned exclusively by DeepSeek Harness.app; `dsh plugin --profile desktop …` from the CLI is rejected. On desktop, install it from the in-app "Plugins" page, or edit the profile's `dependencies` + symlink manually, then restart.
 
-`dsh.bundle.patch` in `package.json` points at the bundled `cordis.patch.yml`. It inserts into the layer stack for you. Do not edit your profile's patch file.
+The bundled `cordis.patch.yml` inserts the layer stack automatically. No need to edit the profile's patch file by hand.
 
-## Flowchart
+**Verify**: after restart, run one turn and check whether `~/.dsh/logs/toolcall-guard.log` has new lines. New lines mean it loaded.
 
-Nine steps, from your message to a clean turn end.
+## Core features
 
-```mermaid
-flowchart TD
-    N1["1 You send a message<br/>Give DSH a job that takes several steps"]
-    N2["2 DSH starts a turn<br/>Enter the turn loop; the model produces steps"]
-    subgraph LOOP["One round = steps 3 → 8"]
-        N3["3 The model keeps working<br/>Write reasoning, write text, or make a real tool call"]
-        N4["4 Checkpoint before closing<br/>Hooked on agent/turn-stopping, before turn/end"]
-        N5{"5 Prerequisites<br/>Switch on; a message exists; last step made no tool call; the turn used at least one tool"}
-        N6{"6 Judge the last step in order<br/>Empty reply → leaked reasoning → long text → fragments → half sentence → looks complete; data = this turn's event stream"}
-        N7{"7 Retry and stall guard<br/>Fewer than 4 nudges this turn; did the last nudge produce new content"}
-        N8["8 Nudge the same turn<br/>Use agent.steer to add one message, picked by the failure shape"]
-    end
-    N9["9 Turn closes<br/>Write turn/end completed; this only means the turn ran to its end, not that the work is done"]
+| Capability | Description |
+| --- | --- |
+| **Structural checks** | Looks only at this turn's event structure, no judge model, no extra tokens. |
+| **Rejoin the same turn** | Steers one sentence with `agent.steer`; no new turn, no lost context. |
+| **Text chosen by break type** | Empty reply, half sentence, tag leak, plan tail each get their own hint. |
+| **Two gates** | This turn called a tool (`reasoning-echo` excepted), and the last step did not, to avoid hitting normal wrap-ups. |
+| **Count guard** | At most 6 per round; if the event count does not grow after recovery, stop and write `give-up`. |
+| **Per-session accounting** | Count and progress are kept per "session + turn number"; sessions do not mix. |
+| **Can be turned off** | `enabled: false` or `debug: false` writes no log lines. |
+| **Zero dependencies** | Uses only services injected by DSH and Node built-in modules. |
 
-    N1 -->|after you send it| N2
-    N2 -->|turn starts| N3
-    N3 -->|turn is about to close| N4
-    N4 -->|start judging| N5
-    N5 -->|all four pass| N6
-    N5 -->|any fails, leave the loop| N9
-    N6 -->|a failure shape matched| N7
-    N6 -->|no match, leave the loop| N9
-    N7 -->|under 4 and still effective| N8
-    N7 -->|4 used or no new content, leave the loop| N9
-    N8 -->|nudge, then back to step 3| N3
-    style LOOP fill:#ffffff,stroke:#5F5E5A,stroke-dasharray:6 4
-```
+## Configuration
 
-By number:
+| Field | Default | Description |
+| --- | --- | --- |
+| `enabled` | `true` | Master switch. |
+| `maxContinuations` | `6` | Maximum steers per round. |
+| `halfSentenceMax` | `200` | Length limit for the half-sentence check. |
+| `fragmentMax` | `400` | Length limit for the fragment check. |
+| `maxChars` | `8000` | Ordinary long text above this is no longer intercepted. |
+| `debug` | `true` | Writes one log line per check. |
+| `logFile` | `~/.dsh/logs/toolcall-guard.log` | Log location. |
+| `steerText*` | see `index.js` | Steer text for each break type. |
 
-- 1 You send a message: Give DSH a job that takes several steps. Go to 2.
-- 2 DSH starts a turn: Enter the turn loop, the model produces steps. Go to 3.
-- 3 The model keeps working: Write reasoning, write text, or make a real tool call. Go to 4; step 8 returns here.
-- 4 Checkpoint before closing: Hooked on `agent/turn-stopping`, before `turn/end`. Go to 5.
-- 5 Prerequisites: All four pass → 6. Any fails → leave the loop, go to 9.
-- 6 Judge the last step in order: A failure shape matched → 7. No match → leave the loop, go to 9.
-- 7 Retry and stall guard: Under 4 and still effective → 8. 4 used or no new content → leave the loop, go to 9.
-- 8 Nudge the same turn: Use `agent.steer` to add one message, picked by the failure shape. Back to 3.
-- 9 Turn closes: write `turn/end completed`. That only means the turn ran to its end, not that the work is done.
+`steerText*` means `steerText`, `steerTextBlank`, `steerTextReasoning`, `steerTextHalf`, `steerTextLeak`.
 
-## How it works
+## Logs
 
-The plugin hooks `agent/turn-stopping`, before `turn/end` is written. It judges the event structure of the turn, not the closing status: the turn still writes `turn/end completed` while the UI has already frozen — exactly what this plugin is there to catch.
-
-Four prerequisites. All four must pass before judging:
-
-- Switch on.
-- The turn has a message.
-- At least one real `tool-call` happened in this turn.
-- The last step made no `tool-call`.
-
-Order of checks. First match wins:
-
-- Gates: `disabled` / `no-message` / `last-step-called-tool` / `reasoning-echo` / `no-tool-anywhere`
-- Empty reply: `reasoning-only`, `blank-after-tool`
-- Leaked reasoning: `leak-unclosed`, `leak-no-body`, `leak-inner-unclosed`, `leak-residual-tag`, `leak-call-head`, `leak-has-body`
-- Degenerate repetition leak: `degenerate-leak`
-- Close-tag tail stub: `leak-tail-stub`
-- `text-too-long`, `maxChars` 8000
-- `tag-shape`, `tag-residual`, `json-tool-call`, `call-head`, `tag-head`, `half-sentence`
-- `plan-tail`, `leak-plan-tail`, `reasoning-echo`
-- `looks-complete`
-
-`why` values:
-
-- `disabled`, `no-message`, `last-step-called-tool`, `no-tool-anywhere`: gate failed, no nudge.
-- `reasoning-only`, `blank-after-tool`: only reasoning, or nothing said after a tool result. Nudge.
-- `leak-unclosed`, `leak-no-body`, `leak-inner-unclosed`: thinking tag left open, closed with no body, or a second one left open. Nudge.
-- `leak-residual-tag`: only broken tags follow the closing tag, no prose at all. Nudge.
-- `leak-call-head`: what follows the closing tag starts with a tool parameter tag and carries prose, e.g. `<parameter name="bash">` then a command that never finishes. Nudge.
-- `leak-has-body`: a real answer follows the tag. No nudge.
-- `degenerate-leak`: the body is one hand-off sentence rewritten over and over, each line prefixed with a reasoning close tag (e.g. session `324afd75` turn 2 step 38: 748 characters / 18 lines with 17 line-leading `</thinking>`, shrinking line by line until it ends on "先测。"). That repetition pushes the text past the 300-character cap of `plan-tail`, disabling that check entirely, so it is caught separately. Structure only: two or more lines starting with a close tag, with real prose left after stripping them. A whole recap that starts with an opening tag such as `<analysis>` is not this case; `leak-*` handles those by whether anything follows the close. Nudge.
-- `leak-tail-stub`: the last sentence drags a reasoning close tag, and stripping the tags leaves only a very short line (80 characters or fewer), e.g. session `72688503` turn 1 step 20: "查一下依赖装在哪。</thinking></thinking>" (9 characters left after stripping). All 20 steps of the turn called tools, but this step called nothing and concluded nothing, and `plan-tail` misses it because the line has no "now / first" prefix. Structure only: the tag lands at the end, nothing substantial remains, and there is no heading, link, completion claim, or waiting word. Nudge.
-- `text-too-long`: body over `maxChars` 8000. No nudge. `leak-*` ignores this limit.
-- `tag-shape`: the whole message is one broken tag. Nudge.
-- `tag-residual`: the whole message is nothing but tags with attributes, no prose. Nudge.
-- `call-head`: the message starts with a tool parameter tag and continues with prose, e.g. `<parameter name="description" string="true">Check backend`. No normal reply ever starts that way; it is a tool call written out as text. Nudge, not capped by `fragmentMax`.
-- `json-tool-call`, `tag-head`: a short JSON call fragment or a tag opening. Nudge. Both are capped by `fragmentMax` 400.
-- `half-sentence`: ends on a comma, semicolon, colon, or dash. Nudge. Capped by `halfSentenceMax` 200.
-- `plan-tail`: every earlier step of the turn called a tool, and the last step only leaves a one-line hand-off such as "now I'll run the gates and review the diff". The action never happens. Judged on structure only: the turn has at least 3 steps (short turns break the same way — session `a2bf67e8` turn 3 had 3 steps and ended on "我先把这两条到底是什么查清楚，再定修法。"), the text is under 300 characters, has no section headings, no trailing question mark, no links, no completion claim, and no waiting words (including "等任一子代理结束" and "现在只等 X 落地"). Nudge.
-- `leak-plan-tail`: the same hand-off, but it follows a reasoning block (e.g. `<thought>...</thought>` then just "pushing this one now"). Nudge.
-- `reasoning-echo`: the reply and the reasoning are almost the same text (after whitespace is stripped, the shorter one is at least 85% of the longer, and both are at least 200 characters). In a normal reply the reasoning is private thinking and the reply is what the user reads; they should differ. When they are identical, the model has dumped its monologue into the answer. Nudge, and the "turn called a tool" gate does not apply.
-- `looks-complete`: the answer reads as finished. No nudge.
-
-Four nudges per turn at most. The plugin records the event count when it nudges. If the next judgment still wants a nudge and the count did not grow, it stops and writes a `give-up` line.
-
-Nudge counts and progress are keyed by session plus turn number. Every session numbers its own turns from 1, so without the session in the key, the nudges spent by session A would be charged to session B, and B would stop at once as "already nudged".
-
-Every judgment writes one line. Synthetic example, fields masked:
+One line per check, fixed fields:
 
 ```text
-<time> | turn=<turn-id> | step=<step-count> | why=<verdict> | recover=<true|false> | model=<model-id> | used=<nudges-used> | text="<first 80 chars, masked>"
+<time> | turn=<turn number> | step=<step> | why=<check> | recover=<true|false> | model=<model name> | used=<steers used> | text="<first 80 chars, placeholder>"
 ```
 
-No judge model. No extra tokens.
+`debug` defaults to `true`. The first 80 chars of the last-step text go into the log. The log stays on this machine; nothing is uploaded. With `debug: false` nothing is written, including `give-up` and `steer-failed`. To change the location, edit `logFile`.
 
-## Other
+## Architecture
 
-Defaults below. Restart after any change.
+```
+index.js              all plugin logic: turn-stopping listener, structural checks, guards, steer text, logging
+cordis.patch.yml      bundle patch: inserts the layer stack
+test/                 35 tests (checks, logging, message shapes)
+```
 
-| Field | Default | What it does |
-| --- | --- | --- |
-| `enabled` | `true` | Master switch |
-| `maxContinuations` | `4` | Nudges allowed per turn |
-| `halfSentenceMax` | `200` | Length cap for half-sentence checks |
-| `fragmentMax` | `400` | Length cap for fragment checks |
-| `maxChars` | `8000` | Long answers past this are left alone |
-| `debug` | `true` | Write one log line per judgment |
-| `logFile` | `~/.dsh/logs/toolcall-guard.log` | Log path |
-| `steerText*` | see `index.js` | Nudge text for each failure shape |
+Design constraint: it intervenes only at `agent/turn-stopping`; it does not read files, create sessions, or change turn state.
 
-`steerText*` covers `steerText`, `steerTextBlank`, `steerTextReasoning`, `steerTextHalf`, and `steerTextLeak`.
-
-`debug` is `true` by default. The first 80 characters of the last step go into the log. The log stays on your machine. With `debug: false`, not one line is written, including `give-up` and `steer-failed`. Change `logFile` to move it.
-
-Tests:
+## Development and tests
 
 ```sh
 npm test
 node --test test/*.test.mjs
 ```
 
-14 tests.
+35 tests: check decisions and false-positive boundaries for each break type, the count guard and `give-up`, log fields and `debug: false`, message shapes.
 
-Limits:
+## Known limits
 
-- A dead process is out of scope. The event stream is cut in half with no closing record, so there is no hook point.
-- Only shapes it knows are caught.
-- If the model keeps ignoring the nudge, the plugin stops. Four nudges at most, and it stops when no new content shows up.
-- Restart DSH for changes to take effect.
+- **A real process crash cannot be saved**: the event stream breaks mid-way and no wrap-up record is written, so the plugin has no moment to intervene.
+- **Only known shapes are recognized**: a new break type is either unrecognized or let through by `looks-complete`; adding one check is enough.
+- **Stops when the model keeps ignoring it**: at most 6 per round, and it also stops when the event count does not grow.
+- **Requires a restart to take effect**: the host half is an in-process module.
+- **Depends on the `agent/turn-stopping` seam**: if upstream changes that event point, this must change too.
 
 ## License
 
-MIT. Full text: [MIT](LICENSE).
+[MIT](LICENSE)
