@@ -61,13 +61,14 @@ Exposed tags are the most direct signal. Normally DSH folds calls into "read fil
 ## Quick start
 
 ```sh
-# 1. Clone into ~/.dsh/plugins/dsh-toolcall-text-guard
-git clone https://github.com/gpboyer2/dsh-toolcall-text-guard.git ~/.dsh/plugins/dsh-toolcall-text-guard
+# Install straight from GitHub (a CLI-managed profile such as web / main)
+dsh plugin --profile <your-profile> add github:gpboyer2/dsh-toolcall-text-guard
 
-# 2. Register with a profile (a CLI-managed profile such as web / main)
+# Local development: clone to ~/.dsh/plugins/dsh-toolcall-text-guard and install through a local link
+git clone https://github.com/gpboyer2/dsh-toolcall-text-guard.git ~/.dsh/plugins/dsh-toolcall-text-guard
 dsh plugin --profile <your-profile> add link:$HOME/.dsh/plugins/dsh-toolcall-text-guard
 
-# 3. Restart DSH
+# Restart DSH
 ```
 
 The `desktop` profile is owned by DeepSeek Harness.app and CLI commands against it are rejected. On the desktop build, install from the in-app Plugins page, or add the symlink to the profile's `dependencies` by hand and restart.
